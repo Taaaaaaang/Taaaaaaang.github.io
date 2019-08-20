@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>关于aerospike | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2016/09/02/关于aerospike/">关于aerospike</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">September 02 2016</p>
+  </section>
+
+  <section class="article-entry">
+    <h4 id="关于-Aerospike-的中文简介"><a href="#关于-Aerospike-的中文简介" class="headerlink" title="关于 Aerospike 的中文简介:"></a>关于 Aerospike 的中文简介:</h4><ul>
+<li><a href="http://blog.csdn.net/dazheng/article/details/47156653" target="_blank" rel="noopener">http://blog.csdn.net/dazheng/article/details/47156653</a> (aerospike概览与 redis 简单对比)</li>
+<li><a href="http://www.infoq.com/cn/news/2015/02/aerospikedb-redis-aws-nosql" target="_blank" rel="noopener">http://www.infoq.com/cn/news/2015/02/aerospikedb-redis-aws-nosql</a></li>
+<li><a href="http://www.infoq.com/cn/articles/aerospike-qa" target="_blank" rel="noopener">http://www.infoq.com/cn/articles/aerospike-qa</a> (aerospike 架构相关问题)</li>
+</ul>
+<p>####关于Aerospike删除数据的问题</p>
+<p><s>
+* Aerospike是“混合型”数据库，索引存在DRAM中，而实际的数据记录在磁盘中（闪存或其他）
+
+<ul>
+<li>在磁盘上的数据只会在被“写覆盖”时才会擦除旧数据(所以我们手动delete一条记录时,是删不掉的)。</li>
+<li>任何时间点，如果有多次被<em>更新</em>过的一条记录还在磁盘上，那么实际上磁盘上有这条记录的多个”版本”（附带有不同的generation ID）。</li>
+<li>当冷启动时，磁盘上所有的记录都会被扫描。只要被扫描到，它们就会被插入到索引中。</li>
+<li>如果同一条记录的不同版本前后分别被扫描到，那么如果后来被扫描到的版本是“旧版本”，那么就会被丢弃；如果是“新版本”，那么这条记录就会被“写覆盖”。</li>
+</ul>
+<p>那么这样就会出现问题：</p>
+<ul>
+<li>如果一条记录的数据已经过期，这样的版本的记录被扫描到时会与可能已经存在的版本记录进行版本比较，如果发现已存在的是旧的版本，那么旧版本数据就会被“擦除”且这条过期的记录也会被“无视”掉。</li>
+<li>然后，扫描继续，如果这条记录的另一个版本又被扫描到，但是已经没有“可能存在的”版本可供比较了（因为在这之前已经被删除或无视掉了T_T），如果这条记录的这个版本没有过期，它就会重新被插入到索引中。</li>
+<li>那么，如果我们知道我们还有多余的内存，解决这个问题的办法之一（有的版本被删除有的被无视）就是跟踪所有的扫描到的记录来防止它又重新被插入索引中。<br></li></ul></s></p>
+
+<p>As 中的delete 操作实际上是将record 的索引引用从内存中剔除(这样其实对外而言可以视为删除, 因为已经无法找到), 但是 record 实际数据存在磁盘中且其空间不会立即被回收, 而是由Evictor根据 ttl 以及最近修改时间等来自动清理回收.<a href="https://www.aerospike.com/docs/architecture/storage.html#eviction-based-on-storage" target="_blank" rel="noopener">参看这里</a></p>
+<p>企业版里有个durable delete, 没用过.</p>
+<p><a href="http://www.infoq.com/cn/articles/aerospike-qa" target="_blank" rel="noopener">Aerospike的网上概览</a></p>
+<h3 id="整体结构为三层"><a href="#整体结构为三层" class="headerlink" title="整体结构为三层:"></a>整体结构为三层:</h3><ul>
+<li>client 层:包含开源的 client library, 包含 aerospike API 的实现, 追踪节点(的变更), 以及获取数据在集群中的位置.</li>
+<li>集群与数据分布层:自动备份,同步数据,不存在中央/master 节点.主要管理集群间通信及自动失效转移, 复制, 跨数据中心同步, 以及automates re-balancing and data migration.</li>
+<li>数据存储层:存储数据到内存及闪存中.</li>
+</ul>
+<p>####客户端层(client layer)</p>
+<ul>
+<li>实现Aerospike API,现实client-server协议，直接与集群连接。</li>
+<li>追踪集群节点，并且知道数据存储在哪个节点上。若集群配置改变或节点增加删除，客户端能立即知道。</li>
+<li>实现了自己的TCP/IP连接池，检测未达到节点错误级别的transaction failures,并重新发送请求到数据备份的节点。</li>
+<li>直接发送请求到数据所在的节点，如果有必要可以重试或重新路由请求(比如集群配置变动)</li>
+</ul>
+<p>这样的架构减少了数据处理延迟,  集群中的offload,简化开发工作量. 在增减集群节点时也无需重启. 也无需把时间浪费在集群的设置或者添加 cluster management servers or proxies.</p>
+<h4 id="集群与数据分布层-Clustering-and-Data-Distribution-Layer"><a href="#集群与数据分布层-Clustering-and-Data-Distribution-Layer" class="headerlink" title="集群与数据分布层(Clustering and Data Distribution Layer):"></a>集群与数据分布层(Clustering and Data Distribution Layer):</h4><p>这一层监控集群通讯并提供一些自动化功能，比如故障转移、数据复制和跨数据中心同步。Aerospike是不存在中心Master节点的。包括一下三个模块：</p>
+<ul>
+<li>集群管理模块(Cluster Management Module): 主要基于Paxos算法(了解主要解决分布式一致性问题)实现，通过投票判断某个节点是不是当前集群里的节点。通过心跳机制来监视集群内节点的连接。</li>
+<li>数据迁移模块(Data Migration Module): 当增加删除节点，集群中的节点是确定的，每个节点利用分布式哈希算法，根据记录的主键把记录划分到”数据分片”里面。数据迁移模块平衡每个节点中的数据，确保每条数据被备份，而且可以配置备份的数量。</li>
+<li>事物处理模块(Transaction Processing Module): 负责请求读写，提供一致性(consistency)和隔离性(isolation)的保证。这个模块有如下责任：<ul>
+<li>同步/异步备份：写数据时，数据的变化会被发送到所有节点，所有节点改变后才提交数据并返回给客户端。</li>
+<li>代理：在极少的情形下,当集群被重新配置,客户端可能短暂的out of date(即无法获取数据了)，这时事务处理模块就会将请求代理给另一个节点。</li>
+<li>副本解决方案：当一个集群从一个分片恢复时，这个模块可以解决不同拷贝之间的冲突。可以被配置为基于”修改次数”或“过期时间”. 当有了一个集群，你可以搭建一个额外的数据中心，然后设置数据中心备份-这确保你的数据中心挂了后，另外一个可以不被代断或最小影响的重新服务。</li>
+</ul>
+</li>
+</ul>
+<h4 id="数据存储层-Data-Storage-Layer"><a href="#数据存储层-Data-Storage-Layer" class="headerlink" title="数据存储层(Data Storage Layer):"></a>数据存储层(Data Storage Layer):</h4><p>Aerospike采用Key-Value对存储的 schemaless data model。数据被放到namespace里面，namespace类似于关系型数据库的database。在namespace里面，数据被划分到sets和records里面，sets类似于关系型数据库的table，records类似于table里面的行。每条记录有一个唯一的叫key的索引，还有一个或多个的bins(相当于数据库table里的列)，bins里面存放这这个 record的数据值。</p>
+<ul>
+<li>sets和bins不需要事先定义，可以在插入数据时自动添加。</li>
+<li>values是强类型的，bins本身没有类型，所以不同records里，相同bin里面，values类型可以不同。 索引（primary keys和secondary keys）被存储在内存中，values可以被存在内存或廉价的SSD中。每个namespace可以被单独配置，所以少量数据可以放在内存中，大量数据可以放在SSD中。</li>
+</ul>
+<p>数据存储层的设计是为了速度以及减少硬件的消耗。可以完全在内存中操作，这样就消除了对缓冲层的需求也正好可以利用闪存的优势。</p>
+<ul>
+<li>一亿的keys仅仅花费6.4GB。虽然key的大小没有限制，但是有效的只有64bytes。</li>
+<li>有效利用底层 SSD读写接口，从而绕开标准的文件系统(传统的磁盘限制)，以或得更高的性能。</li>
+<li>内部的智能碎片处理和过期记录删除进程确保有足够的内存空间。碎片处理程序跟踪每一个块中的活跃记录，回收最少使用的。</li>
+<li>删除程序移除过期的记录，回收内存。每个namespace可以配置记录过期时间，每个记录的年纪从最后一次修改开始计时，应用程序可以重写默认的过期时间，标志一个记录永远不被删除。</li>
+</ul>
+<h4 id="操作Aerospike"><a href="#操作Aerospike" class="headerlink" title="操作Aerospike"></a>操作Aerospike</h4><p>与传统的 RDBMS 不同, Aerospike 无需预先设置 database schema, 即无模式方式创建 database和 tables.</p>
+<p>在 Aerospike中, 我们可以这么做:</p>
+<ul>
+<li>配置好初始化设定. Aerospike 中的 database 即<code>namespace</code>. 安装完 aerospike 后, 每一个节点都 必须通过配置其namespace 来明确如何创建, 复制 database. 如此, 重启服务后就会自动创建 database.</li>
+<li>我们的应用首次连aerospike 写入数据时:<ul>
+<li>database schema(可以这么理解) 就会自动生成.</li>
+<li>aerospike 的schema 也很灵活, 我们无需预先定义 schema. 比如, 想要添加一个新的 bin(类似于列), 我们只需要存储值到指定的bin即可.</li>
+</ul>
+</li>
+<li>必要时候更新配置文件:<ul>
+<li>要更改 namespace 的parameters,我们可以通过更新配置文件即可, 可以</li>
+</ul>
+</li>
+</ul>
+<p>当然 Aerospike 也提供了管理工具和监测工具. 篇幅过长, 具体再说.</p>
+<p>##Data Management</p>
+<p>结构化的数据存储在 bins 中. 每个 bin 支持特定的数据类型: integer, string, float, list, map, geojson, binary objects, language-serialized objects.</p>
+<ul>
+<li>key-value操作，数据库内部操作，比如increment</li>
+<li>数据备份</li>
+<li>基于每行记录的超时和删除策略</li>
+<li>无缝更新和改变集群大小</li>
+<li>闪存(SSD)优化</li>
+<li>跨数据中心拷贝 Aerospike可以被扩展：</li>
+<li>复杂数据类型（list and map，可以嵌套）</li>
+<li>查询 string和integer可以被索引，数据在string和integer上按照范围搜索</li>
+<li>UDF(用户自动义函数)</li>
+<li>聚合（aggregations） 数据集可以被用户自动有函数操作，然后返回聚合的数据。</li>
+</ul>
+<h4 id="Data-Model"><a href="#Data-Model" class="headerlink" title="Data Model"></a>Data Model</h4><p>As 的数据模型不遵循死板的 schema(对比传统的数据库), 数据类型的变动无需修改 schema, 只需要增加一个的 bin type 即可.</p>
+<h5 id="Namespaces"><a href="#Namespaces" class="headerlink" title="Namespaces"></a>Namespaces</h5><p>Namespaces 是最高级别的数据容器. 一个 namespace 可以是传统意义上一个或一组 database一部分. namespace聚集数据的方式与我们如何存储和管理的方式息息相关, 即namespace 包含了records, indexes 以及 policies. 其中policy 规定了 namespace 的行为, 比如:</p>
+<ul>
+<li>数据如何存储: 是在 DRAM 上还是在磁盘上(闪存);</li>
+<li>一条记录(record)保留多少副本;</li>
+<li>record 的过期时间. </li>
+</ul>
+<p>更多信息可以参看<a href="http://www.aerospike.com/docs/operations/configure/namespace" target="_blank" rel="noopener">Configuring Namespaces.</a></p>
+<p>一个 database 可以指定多个 namespaces, 每一个可以有不同的 policy. 我们可以吧 namespaces 理解为绑定了数据的物理容器(存储器).</p>
+<h5 id="sets"><a href="#sets" class="headerlink" title="sets"></a>sets</h5><p>在 namespaces 中, records 从属于逻辑容器, 我们成为 sets. 我们用来给这些记录做逻辑分类, 比如我们设备信息的记录dv 与 设备别名就在不同的 sets 里面. sets继承了  所在namespace的 policies 同时也可以添加适用于本 set的 policy. 比如, 只有特定的 set 才能有 secondary indexes, 或者某个 set 允许scan操作.</p>
+<p>#####Records</p>
+<p>As 是行存储的,或者说基本存储单元是 record. 一个 record 从属于某个 namespace 或者 namespace 中的 set. record 使用 key 作为它们的唯一标识( unique ID).</p>
+<p>record 有以下几部分构成:</p>
+<table>
+<thead>
+<tr>
+<th>要素</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>key</td>
+<td>唯一 ID,  record 依其hash值定位寻址. 其hash值叫做digest</td>
+</tr>
+<tr>
+<td>metadata</td>
+<td>包含record的version(generation)info以及过期时间ttl</td>
+</tr>
+<tr>
+<td>bins</td>
+<td>等同于 RDBMS 中的列</td>
+</tr>
+</tbody></table>
+<h5 id="Keys-和-Digests的关系"><a href="#Keys-和-Digests的关系" class="headerlink" title="Keys 和 Digests的关系."></a>Keys 和 Digests的关系.</h5><p>根据key来读取/写入records. key 被发送给 database 时, 它以及它的 information 就被 hash 成一个160-bits 的 digest, 用于这条 record 的寻址定位. </p>
+<h5 id="Metadata"><a href="#Metadata" class="headerlink" title="Metadata"></a>Metadata</h5><p>每条 record 都包含以下信息:</p>
+<ul>
+<li>generation: 追踪这条 record 的修改记录(是个数字).  这个数字返给读取它的application, 下次写的时候就可以确认这期间其有没有被修改过.</li>
+<li>time-to-live(TTL): 指定了 record 的有效期.  As 会自动根据此值将 record 置为过期.</li>
+<li>last-update-time(LUT): 指定了record 上次被更新的时间戳.这个值是 database 内部使用不会返回给 client.</li>
+</ul>
+<h5 id="Bins"><a href="#Bins" class="headerlink" title="Bins"></a>Bins</h5><p>每条 record 中, 数据是存在一个或多个 bins 中. bins 由 name 和 value 构成. 它不指定数据类型, 而是由值( value) 决定的. 这样动态的数据类型使得数据模型更加灵活。 比如, 一个 record 包含一个叫’id’ 的 bin, 其值是 string 类型的’bob’, 将来可以变为存integer 类型的数据.</p>
+<p>namespace 中或者 set 中的 records 间可能差异很大. 由于records不需要定义schema, 所以每一个 record都可以有不同的 bin 值类型.</p>
+<h4 id="Primary-Index"><a href="#Primary-Index" class="headerlink" title="Primary Index"></a>Primary Index</h4><p>As 中主键(pk)是一种分布在各个节点的分布式树结构混合分布式哈希表技术,使用一个可靠的hash函数，把key分配到分区里（partitions），然后每个分片又被分布到节点上。 主键被hash为20-bytes（这个hash值称为digest), 尽管会将某些数据变大(比如 integer 类型的只有8-bytes), 但总体来说是有益的, 因为所有的操作都不用考虑key 的大小以及其分布.</p>
+<h4 id="Index-Metadata"><a href="#Index-Metadata" class="headerlink" title="Index Metadata"></a>Index Metadata</h4><p>每个索引要64-bytes. 与20-bytes一同存储的还包括:</p>
+<ul>
+<li>write generation: 追踪 key更新的次数,用于解决更新冲突;</li>
+<li>expiration time: 追踪 key 过期的时间. 自动清理模块会用到这个元数据;</li>
+<li>last update time: 追踪 key 过期的时间. 自动清理模块会用到这个元数据;</li>
+<li>storage address: 存储地址(在内存以及持久存储介质中的数据)</li>
+</ul>
+<h4 id="Index-Persistence"><a href="#Index-Persistence" class="headerlink" title="Index Persistence"></a>Index Persistence</h4><p>主键只会存在内存中, 不会在磁盘中. 这就是高吞吐性能的保证. 当 As 重启时, 它会扫描所有数据并为所有分片建立索引.</p>
+<h4 id="快速重启"><a href="#快速重启" class="headerlink" title="快速重启"></a>快速重启</h4><p>As 支持快速重启(比如要升级 As). 就是从 Linux 共享内存中分配出来存储索引, 当 As 重启其就会从之前的内存中重新恢复数据, 而无需重新扫描所有的数据.</p>
+<h3 id="Secondary-Index-用到再说"><a href="#Secondary-Index-用到再说" class="headerlink" title="Secondary Index 用到再说"></a>Secondary Index 用到再说</h3><p>建议在低负载情况下做, 因为index 的DDL 是高I/O 操作.</p>
+<h4 id="Key-value-Store"><a href="#Key-value-Store" class="headerlink" title="Key-value Store"></a>Key-value Store</h4><ul>
+<li>As 是 schemaless 的, 即不需要预先定义 bins, 自动生成;</li>
+<li>As的 record 由 key 作为索引访问数据.</li>
+<li>bin 值是强类型的, 但是 bin 本身不是, bin 只是一个 name. 不同的 record 中相同的 bin name 可以有不同的值类型.比如一个名为 age 的 bin, 有些 record中其值为 integer 类型, 有些可以为 string类型.</li>
+<li>每个 record 都包含追踪其更新数的(generation count) metadata. 当 App 读取这个 record 时会得到此值, 后面要写入的时候就可以依此确认数据未被修改(从上次读取). </li>
+</ul>
+<h4 id="API-相关"><a href="#API-相关" class="headerlink" title="API 相关"></a>API 相关</h4><p>Record 支持的操作:</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>set</td>
+<td>写入record,不管存不存在</td>
+</tr>
+<tr>
+<td>create</td>
+<td>如果record不存在, 就创建</td>
+</tr>
+<tr>
+<td>update</td>
+<td>如果record 存在, 则覆盖指定的bins, 未指定的 bins 不做修改</td>
+</tr>
+<tr>
+<td>replace</td>
+<td>如果 record 存在, 则全量覆盖</td>
+</tr>
+<tr>
+<td>delete</td>
+<td>删除 record</td>
+</tr>
+<tr>
+<td>get</td>
+<td>获取 record</td>
+</tr>
+<tr>
+<td>add</td>
+<td>integer 类型 bin 的值做加法</td>
+</tr>
+<tr>
+<td>append</td>
+<td>string 类型的 bin 值的做拼接</td>
+</tr>
+</tbody></table>
+<h2 id="TOOLS"><a href="#TOOLS" class="headerlink" title="TOOLS"></a>TOOLS</h2><p>内建的方便我们查询管理的工具</p>
+<ul>
+<li>Aerospike query language - aql (类似于SQL命令行用于基本查询以及database功能的检测, 也可以用于管理索引和 UDFs.</li>
+<li>Backup and Restore - asbackup/asrestore  备份/恢复数据用的</li>
+<li>Aerospike Admin - asadm 窥探集群信息的工具, 比如大小, 健康状况等.</li>
+<li>Log Latency Tool - asloglatency  Aerospike 包含一系列的设置来诊断潜在问题, 这个工具会分析日志文件并显示事务的各个部分.(没用过)</li>
+<li>Aerospike Info - asinfo 用来收集统计数据以及设置各种各样的配置参数.</li>
+</ul>
+<h4 id="asinfo"><a href="#asinfo" class="headerlink" title="asinfo"></a>asinfo</h4><p>提供了面向 As 集群的命令与控制接口,一般用不到. 详情可看文档.</p>
+<p>asinfo -v truncate:namespace=<namespace name>;set=<set name>;lut=<time>用来删除指定 set 中的数据.</time></set></namespace></p>
+<p>比如:<code>asinfo -v &#39;truncate:namespace=test;set=set1;&#39;</code></p>
+<h4 id="asadm"><a href="#asadm" class="headerlink" title="asadm"></a>asadm</h4><p>一个用于获取集群当前健康状况及统计数据概览的交互式工具, 也可以执行动态配置以及集群层级的调节命令.</p>
+<p>只列几个常用的, 其他具体可以使用 <code>asadm --help</code> 来获取使用指南. </p>
+<ul>
+<li><code>asadm [-h [HOST_IP]]</code>进入相应aerospike 的交互命令环境.(进入后会出现<code>Admin&gt;</code>).</li>
+<li>比如我们要查一下集群的各项信息(网络, 磁盘/内存占用, namespaces 等信息), 可以输入<code>info</code>即可打印出相应的基本信息.</li>
+<li><code>show statistics [namespace|sets|bins|...]</code>显示相应部分的详细的统计数据.</li>
+<li><code>show config</code> 显示集群所有的配置信息.</li>
+</ul>
+<h4 id="aql-使用较多"><a href="#aql-使用较多" class="headerlink" title="aql 使用较多"></a>aql 使用较多</h4><p>使用方式:</p>
+<p><code>aql OPTIONS</code><br>OPTIONS 可以为(只列常用的, 其他的可以使用 aql –help获取帮助)</p>
+<ul>
+<li>-h &lt;host&gt; 连接其他节点时用到, 缺省为127.0.0.1</li>
+<li>-p &lt;port&gt; 缺省为3000</li>
+<li>-c &lt;command&gt;  执行特定的命令</li>
+<li>-o (json | table) 设定输入模式(有时 table 模式打印不全可以换做 json 模式打印, 也可以进入 aql 后使用<code>set output json</code> 设置</li>
+</ul>
+<p>进入 aql 命令模式后, 常用的:</p>
+<ul>
+<li><code>show namespaces|sets|bins</code> 显示所有的 namespaces|sets|bins</li>
+</ul>
+<p> <strong>DDL:</strong></p>
+<ul>
+<li><code>CREATE [indextype] INDEX &lt;index&gt; ON &lt;ns&gt;[.&lt;set&gt;] (&lt;bin&gt;) &lt;type&gt;</code></li>
+<li><code>DROP INDEX &lt;ns&gt; &lt;index&gt;</code></li>
+</ul>
+<p><strong>DML:</strong>(部分)</p>
+<ul>
+<li><p>INSERT INTO <ns>[.<set>] (PK, <bins>) VALUES (<key>, <values>)</values></key></bins></set></ns></p>
+</li>
+<li><p>DELETE FROM <ns>[.<set>] WHERE PK=<key></key></set></ns></p>
+</li>
+<li><p>SELECT * FROM <ns>[.<set>] WHERE DIGEST=’<digest_hex_string>‘</digest_hex_string></set></ns></p>
+</li>
+<li><p>SELECT <bin>[, <bin>[, …]] FROM <ns>[.<set>] [IN indextype] WHERE [<predicate></predicate></set></ns></bin></bin></p>
+</li>
+<li><p>As 中, 一个 namespace 就是无差别存储的数据的集合. 每一个 namespace 都被切分为4096个 partitions, 然后均分到集群各个节点. 也就是说n 个节点的集群, 每个节点都会存储大约1/n的数据.</p>
+</li>
+<li><p>As 使用随机哈希方法来确保 partitions被节点均分, 不需要手工进行sharding, 节点间自动进行协同均匀”切分”.  As client 会将请求发给合适的节点. 如果节点有增减, 集群会自动 re-balances. 节点地位平等, 没有主从关系.</p>
+</li>
+<li><p>As 使用哈希过的 record key 的值来将新的 records 分配到某个partition. 这样的策略使得一个 record 总是会被 map 到同一个 partition, 即 records 终其一生都待在 这个partition中. partitions 可以在服务器间转移, 但不应该被切分. records 不会被map 到另一个 partition 中.</p>
+<blockquote>
+<p>每个节点都有一个配置文件. namespace 的配置参数在所有节点上必须相同.</p>
+</blockquote>
+</li>
+</ul>
+<h2 id="数据复制与同步-其中XDR只有企业版才可以使用的特性"><a href="#数据复制与同步-其中XDR只有企业版才可以使用的特性" class="headerlink" title="数据复制与同步(其中XDR只有企业版才可以使用的特性)"></a>数据复制与同步(其中XDR只有企业版才可以使用的特性)</h2><h4 id="无副本的-As-集群"><a href="#无副本的-As-集群" class="headerlink" title="无副本的 As 集群"></a>无副本的 As 集群</h4><p>在 As 中, 配置文件中的”replication factor”若配置为1, 即说明无数据副本, 数据只有一份. 那么 这个节点都称为一个 data master(即读/写数据的primary source). As client 是 location-aware(位置感知型的, 因为根据 pk哈希值来分配的), 即它知道每个 partition 的”位置”所以”单步内”即可获取指定数据. 每个读/写请求都是发送给 data master来处理.</p>
+<h4 id="有副本的-As-集群"><a href="#有副本的-As-集群" class="headerlink" title="有副本的 As 集群"></a>有副本的 As 集群</h4><p>在 As 中, 配置文件中的”replication factor”若配置为2, 意味着存储两份数据: <em>master</em> 和 <em>replica</em></p>
+<h2 id="Backup-与-Restore"><a href="#Backup-与-Restore" class="headerlink" title="Backup 与 Restore"></a>Backup 与 Restore</h2><p>As提供了备份与还原集群数据的工具, 通常通常情况下, 数据副本(集群内部)与 XDR( 跨数据中心复制, 这个特性是有企业版才有)即可确保数据不会在硬件/网络异常情况下丢失. 但是, 定期备份容灾也是很有必要的.</p>
+<p>backup/restore 工具:</p>
+<ul>
+<li><code>asbackup</code>:     备份整个 namespace 或者指定的 set (它使用 As client 的标准 scan API)</li>
+<li><code>asrestore</code>:    还原由 <code>asbackup</code> 备份的数据.</li>
+</ul>
+<h4 id="什么数据可以备份"><a href="#什么数据可以备份" class="headerlink" title="什么数据可以备份?"></a>什么数据可以备份?</h4><ul>
+<li>Records<ul>
+<li>record 的元数据(digist, TTL, generation count, key)</li>
+<li>regular bins(strings, integer, binary)</li>
+<li>complex data type(CDT) bins(list, map)</li>
+<li>Large data type(LDT) bins (large list)</li>
+</ul>
+</li>
+<li>二级索引定义</li>
+<li>UDF modules</li>
+</ul>
+<h4 id="定量备份"><a href="#定量备份" class="headerlink" title="定量备份"></a>定量备份</h4><p>版本&gt;=3.12 可以指定时间戳(前/后)备份. </p>
+<h4 id="How"><a href="#How" class="headerlink" title="How"></a>How</h4><h5 id="Backup"><a href="#Backup" class="headerlink" title="Backup"></a>Backup</h5><ul>
+<li><p>Backup files 是文本文件. 详情参看<a href> File Formate Specification</a>.</p>
+</li>
+<li><p><code>asbackup</code>最基本的使用方式就是, 假定我们集群包含的某个节点 IP 为1.2.3.4, 要备份集群中namespace 为 test的数据到文件路径为path_to_backupfile 的文件(夹). 则 </p>
+</li>
+<li><p><code>$ asbackup --host 1.2.3.4 --namespace test --directory path_to_backupfile</code></p>
+</li>
+<li><p>文件超过250MiB 默认自动拆分为多个文件, 当然, 也可以备份为单一文件</p><p><s>(<code>--output-file</code>)</s></p><p>.</p>
+</li>
+<li><p><code>--no-cluster-change</code> 选项指定如果备份过程中集群中节点出问题, 则放弃本次备份. 因为如果某个节点 fails, 则集群会自动再平衡, 发生数据迁移, 需等到此过程结束再尝试 Backup, 要么重新命名 Backup 文件, 要么使用 <code>--remove-files</code> 选项自动替换原先已存在的文件.</p>
+</li>
+</ul>
+<h4 id="如何还原数据"><a href="#如何还原数据" class="headerlink" title="如何还原数据"></a>如何还原数据</h4><p>由于 Backup 是不关心集群的 size 以及configuration的, 即备份的集群A 与 带还原的集群 B 之间的 size 与 configuration 可以完全不同. 比如,  Ori集群 有5个节点, 而Des 集群可以有4个 或者7个, <code>restore</code> 程序会较为平均地将数据分布到 Des 的各个节点.</p>
+<p><code>asrestore</code> 最基本的使用就是, 假定指定Des集群某个节点的 host(–host), 以及备份文件(<code>-- directory</code>). </p>
+<p><code>$ asrestore --host 1.2.3.4 --directory path_of_backupfile</code></p>
+<p>默认的, 备份就会被还原到Des相应的 namespace. <code>--namespace</code> 可以指定一个与Ori不同的 namespace 名字. 比如Ori 的 namespace 是<code>test</code> 而 Des 的namespace为 <code>prod</code>, 可以这么做</p>
+<p><code>$ asrestore --host 1.2.3.4 --directory path_of_backupfile  --namespace test, prod</code></p>
+<p>对应于单一备份文件, <code>asrestore</code> 有<code>--input-file</code>选项供使用.  Des 中的数据保留 Ori数据的 TTL.  但是 Des 的数据的<code>last-update-time</code> 以及<code>generation</code> 会更新.</p>
+<h4 id="Write-policy"><a href="#Write-policy" class="headerlink" title="Write policy"></a>Write policy</h4><p>由于还原数据使用的是 As标准存储的 API, 所以如果Des namespace包含一部分records, 那么默认的, 写入策略如下:</p>
+<blockquote>
+<p>约定一下, 这里所说的相同的 record 是基于 key 判断的.</p>
+</blockquote>
+<ul>
+<li>Ori 的 record 在 Des 中已存在, 如果 record 过期(基于 TTL), 则 Des 中不做更新, 否则(未过期或者原本 Des 中不存在), 则覆盖或插入;</li>
+<li>如果 Des 中 record 数据版本更高(基于 generation count), 则不做更新; 否则覆盖, 若包含原先不存在 bins, 在这些 bins 也会保留.</li>
+</ul>
+<p>以下<code>asrestore</code> 命令选项可以用来修正 write policy:</p>
+<ul>
+<li><code>--unique</code> : Des中如果存在”相同的”(基于key)record(相对于 Ori 而言), 无视 generation counts, 不做更新.</li>
+<li><code>--no-generation</code> : 强制覆盖相同的 record.</li>
+<li><code>--replace</code> : 如果Ori中相同的 record 不包含 Des 中 record 的某个 bin, 则写入时也不保留 这些bins.</li>
+</ul>
+<h2 id="Namespace-的配置"><a href="#Namespace-的配置" class="headerlink" title="Namespace 的配置"></a>Namespace 的配置</h2><p>示例:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">namespace &lt;namespace-name&gt; &#123;</span><br><span class="line">    # memory-size 4G           # 4GB of memory to be used for index and data</span><br><span class="line">    # replication-factor 2     # For multiple nodes, keep 2 copies of the data</span><br><span class="line">    # high-water-memory-pct 60 # Evict non-zero TTL data if capacity exceeds</span><br><span class="line">                               # 60% of 4GB</span><br><span class="line">    # stop-writes-pct 90       # Stop writes if capacity exceeds 90% of 4GB</span><br><span class="line">    # default-ttl 0            # Writes from client that do not provide a TTL</span><br><span class="line">                               # will default to 0 or never expire</span><br><span class="line">    # storage-engine memory    # Store data in memory only</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>我们可以编辑/etc/aerospike/aerospike.conf 文件来配置 namespace 相关信息.</p>
+<p>这里只谈对 SSD 做存储引擎的配置(我们测试环境非 ssd)</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">namespace &lt;namespace-name&gt; &#123;</span><br><span class="line">    memory-size &lt;SIZE&gt;G         #用来分给给主键和二级索引使用的最大内存空间.</span><br><span class="line">    storage-engine device &#123;     # 用来做持久存储的 storage-engine device</span><br><span class="line">        device /dev/&lt;device&gt;    # raw device. Maximum size is 2 TiB</span><br><span class="line">        # device /dev/&lt;device&gt;  # (optional) another raw device.</span><br><span class="line">        write-block-size 128K   # adjust block size to make it efficient for SSDs.</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>非 ssd 的话</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">namespace &lt;namespace-name&gt; &#123;</span><br><span class="line">    memory-size &lt;SIZE&gt;G         #用来分给给主键和二级索引使用的最大内存空间.</span><br><span class="line">    storage-engine device &#123;     # 用来做持久存储的 storage-engine device</span><br><span class="line">        file /opt/aerospike/&lt;filename&gt;   # 数据文件的位置</span><br><span class="line">        filesize &lt;SIZE&gt;G 		  #每个文件的大小</span><br><span class="line">        write-block-size 128K   # adjust block size to make it efficient for SSDs.</span><br><span class="line">        # data-in-memory true/false 是否将所有数据也放在内存中</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Aggregation"><a href="#Aggregation" class="headerlink" title="Aggregation"></a>Aggregation</h2><p>主要使用 Stream UDFs 来聚合查询结果, Aerospike 的aggregation 可以做快速,灵活的查询操作. 这个很类似于 MapReduce 系统(Hadoop里的), 简单理解就是对一些独立元素组成的概念上的列表/集合（例如，一个测试成绩的列表）的每一个元素进行指定的操作, 然后对此列表的元素进行适当的合并.</p>
+<p>Aerospike 里面的 aggregation 是由 Lua 实现的(Hadoop 为 Java). 且 Aerospike 建议在 index基础上做聚合(本质就是一个 where分句). 根据 index 筛选缩小范围( Aerospike 对 index 有优化)</p>
+<h4 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h4><ul>
+<li>计数然后统计: 比如一个实时数据分析的例子 航班时刻表(<a href="http://www.aerospike.com/launchpad/realtime_analytics.html" target="_blank" rel="noopener">http://www.aerospike.com/launchpad/realtime_analytics.html</a>)</li>
+<li>实时的 dashboard</li>
+</ul>
+<p> Aggregation 基本步骤:</p>
+<ol>
+<li>创建查询的应用: 创建 indexes( 即某个bin指定为二级索引) ===&gt;  插入一条带索引 bin 的 record</li>
+<li>创建 aggregation module(Lua 编写)</li>
+<li>设置 aggregation module path(可选, 有默认默认路径)</li>
+<li>注册module 到 aerospike 集群</li>
+<li>使用一个 predicate( 类似 where 分句)构建一个 aggregate query.</li>
+</ol>
+<p><img src="/Users/tangyuhao038/Desktop/query_stream_mapaggregatereduce.png" alt="图解"></p>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text= id="关于-Aerospike-的中"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2016/09/02/关于aerospike/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

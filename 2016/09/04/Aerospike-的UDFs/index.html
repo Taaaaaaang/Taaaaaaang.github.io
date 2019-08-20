@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>Aerospike 的UDFs | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2016/09/04/Aerospike-的UDFs/">Aerospike 的UDFs</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">September 04 2016</p>
+  </section>
+
+  <section class="article-entry">
+    <p>UDF(User-Defined Function) 是可运行在 aerospike 数据服务中的功能代码, 使用 UDFs 可以用来拓展数据库的功能, 使用Lua 编写(嵌入式,可以直接与 C互相调用)</p>
+<p>Aerospike为我们提供了一系列的 Lua types(与数据库支持的数据类型配合)来方便地开发. <a href="http://www.aerospike.com/docs/udf/api_reference.html" target="_blank" rel="noopener">Lua As API</a></p>
+<h5 id="可以分为两种"><a href="#可以分为两种" class="headerlink" title="可以分为两种"></a>可以分为两种</h5><ul>
+<li><p>Record UDFs用来操作单个 record(增删改查)</p>
+<p>  比如</p>
+<ul>
+<li>status = aerospike:create( rec )</li>
+<li>status = aerospike:exists( rec )</li>
+<li>status = aerospike:update( rec )</li>
+<li>status = aerospike:remove( rec )</li>
+</ul>
+</li>
+<li><p>Stream UDFs用来流式处理 query 的 output(record stream).  可以由多个流操作(filter,map, reduce 等)组合来完成比较复杂的查询. 我们首先根据次/二级索引( secondary index),使用 query初步筛选出一批; 然后就是stream UDF出场时间了, 它可以用于获取 records 中的bins的值, 对符合一定条件的records计数等类似的统计数据. 总得来说分三步: 创建次/二级索引 ====&gt;  运行根据次/二级索引查询出一部分数据 =====&gt; 然后使用相应的 Stream UDF 对该 stream 进行操作.</p>
+</li>
+</ul>
+<h4 id="Lua"><a href="#Lua" class="headerlink" title="Lua"></a>Lua</h4><p>轻量级的,功能强大的嵌入式脚本语言. Aerospike 可以使用它来进行 UDF 功能扩展.</p>
+<h4 id="UDF-Modules"><a href="#UDF-Modules" class="headerlink" title="UDF Modules"></a>UDF Modules</h4><p>UDF Modules 作为一个整体, 包含相关联的变量及函数. 可以被其他 modules 引用/导入.<br>要使用自己编写的 Module, 必须先将其安装/注册在 Server上, 通过client API  或者 aql.</p>
+<h2 id="Record-UDFs"><a href="#Record-UDFs" class="headerlink" title="Record UDFs"></a>Record UDFs</h2><ul>
+<li>操作单个 record. 首个参数是 record本身. 返回值可以是任何 Aerospike支持的类型. 参数本身也得是受支持的类型.</li>
+<li>只能有一个返回值.</li>
+<li>典型使用案例是增删改查, 访问由client 构造并传递的参数.</li>
+<li>构造返回值</li>
+</ul>
+<h2 id="Stream-UDFs"><a href="#Stream-UDFs" class="headerlink" title="Stream UDFs"></a>Stream UDFs</h2><ul>
+<li>或者叫做聚合函数, 使得我们可以对一批 record 进行一组操作. </li>
+<li>首先要有secondary index, 因为 Stream UDFs 是在其查询结果的基础上进行的;</li>
+<li>UDF要注册过才能使用.</li>
+<li>当前stream支持的聚合操作: filter, map, aggregate, reduce.</li>
+<li>与 Record UDFs 主要区别在于 Record UDFs 返回一个值, 而 Stream UDFs 返回的是一个stream的描述 (stream definition). 它包含一系列作用在复合条件数据上的函数, 并且此类函数属于只读函数.</li>
+</ul>
+<p>Stream UDFs 的整个流程就像 Linux 中的 pipe 机制, 有这么一个情景: 我们要查询一个文件 namelist.txt中的含几个字段(“中国”, “张三”的行, 那么可能会使用这样的语句. <code>cat namelist.text |grep &quot;中国&quot; | grep &quot;张三&quot; | wc -l</code> 一个命令的输出即是下一个命令的输入.  类似的, Stream UDFs 每一个函数必须有一个input stream, output stream. 一个函数的output stream变为这个”处理链”的另一个函数的Input stream.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">function my_stream_udf(s)</span><br><span class="line">    local m = map()</span><br><span class="line">    return s : filter(my_filter_fn) : map(my_map_fn): aggregate(m, my_aggregate_fn): reduce(my_reduce_fn)</span><br><span class="line">end</span><br></pre></td></tr></table></figure>
+
+<h4 id="The-Filter-Operation"><a href="#The-Filter-Operation" class="headerlink" title="The Filter Operation"></a>The Filter Operation</h4><p>从 stream 中滤出符合条件的值.  示例:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">local function my_filter_fn(record)</span><br><span class="line">    if record[&apos;age&apos;] &gt; 18 and record[&apos;sex&apos;] == &apos;male&apos; then</span><br><span class="line">        return true</span><br><span class="line">    else</span><br><span class="line">        return false</span><br><span class="line">    end</span><br><span class="line">end</span><br></pre></td></tr></table></figure>
+
+<h4 id="The-Map-Operation"><a href="#The-Map-Operation" class="headerlink" title="The Map Operation"></a>The Map Operation</h4><p>对 stream 中的值进行”变换”, 即接收一个值, 处理过后将其返回. 值的类型只能是 integer, string, list, map. 示例:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">local function my_map_fn(rec)</span><br><span class="line">    local result = map()</span><br><span class="line">    result[&apos;name&apos;] = rec[&apos;name&apos;]</span><br><span class="line">    result[&apos;city&apos;] = rec[&apos;city&apos;]</span><br><span class="line">    return result</span><br><span class="line">end</span><br></pre></td></tr></table></figure>
+
+<h4 id="The-Aggregate-Operation"><a href="#The-Aggregate-Operation" class="headerlink" title="The Aggregate Operation"></a>The Aggregate Operation</h4><p>聚合一串数据最终到一个值里.  示例:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">local function my_aggregation_fn(aggregate, nextitem)</span><br><span class="line">    -- If the count for the city does not exist, initialize it with 1</span><br><span class="line">    -- Else increment the existing counter for that city</span><br><span class="line">    aggregate[nextitem[&apos;city&apos;]] = (aggregate[nextitem[&apos;city&apos;]] or 0) + 1</span><br><span class="line">    return aggregate</span><br><span class="line">end</span><br></pre></td></tr></table></figure>
+
+<p>这样就可以模拟比如类似 SQL 中的 SELECT DISTINCT等操作.</p>
+<h4 id="The-Reduce-Operation"><a href="#The-Reduce-Operation" class="headerlink" title="The Reduce Operation"></a>The Reduce Operation</h4><p>即”简化”操作, reduce function 接收两个值, 返回值作为该函数下次调用的第一个参数. 即 两个值是同种类型, 且返回值也是此类型(integer, list, string, map). 其显著特征就是该函数会在 server nodes 以及 client side 都执行. 所有的节点先执行预先定义的 stream functions, 最终结果发送给应用. 然后应用中的 client 层调用 reduce 函数</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">local function my_merge_fn(val1, val2)</span><br><span class="line">    return val1 + val2</span><br><span class="line">end</span><br><span class="line"></span><br><span class="line">local function my_reduce_fn(global_agg_value, next_agg_value)</span><br><span class="line">    -- map.merge is a library function will call the my_merge_fn for each key and returns a new map.</span><br><span class="line">    -- my_merge_fn will be passed the values of the key in two maps as arguments.</span><br><span class="line">    -- It stores the result of merge function against the key in the result map</span><br><span class="line">    return map.merge(global_agg_value, next_agg_value, my_merge_fn)</span><br><span class="line">end</span><br></pre></td></tr></table></figure>
+
+<h4 id="UDFs-的管理"><a href="#UDFs-的管理" class="headerlink" title="UDFs 的管理"></a>UDFs 的管理</h4><p>UDFs 的管理有两种途径: aql 和  不同语言对应的 client API. 所有的 UDFs 的管理都是围绕 modules的, 一个 Modules 包含一个或者多个 UDFs. 一个 module以及它的额外依赖必须要先注册到集群然后才能调用. </p>
+<h4 id="UDF-的生命周期"><a href="#UDF-的生命周期" class="headerlink" title="UDF 的生命周期"></a>UDF 的生命周期</h4><p>从所在的 module 注册到 cluster 中开始, 到removed. 对 module 的更改必须再次注册才能使用更新内容. 一旦注册发起, 自动在 nodes 间复制注册(异步, 所以可能会延迟生效).</p>
+<h4 id="UDFs局限"><a href="#UDFs局限" class="headerlink" title="UDFs局限"></a>UDFs局限</h4><ul>
+<li>Lua 本身版本不同的区别造成的限制(比如数字类型, 栈缓冲大小等) </li>
+<li>支持的数据类型有限: integer,  bytes, list, string, map. 不能直接返回一个 Record.</li>
+</ul>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text=UDF(User-Defined Fun"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2016/09/04/Aerospike-的UDFs/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

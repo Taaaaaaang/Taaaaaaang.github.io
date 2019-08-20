@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>View_and_Window_Architecture | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2015/11/07/View-and-Window-Architecture/">View_and_Window_Architecture</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">November 07 2015</p>
+  </section>
+
+  <section class="article-entry">
+    <h1 id="View-and-Window-Architecture"><a href="#View-and-Window-Architecture" class="headerlink" title="View and Window Architecture"></a>View and Window Architecture</h1><p>UIKit 以及系统的其他 framework 提供了一些内置的不同类型的 view 方便我们快速构建视图层. 所以深入理解它们如何工作的对于我们处理视图层很重要</p>
+<h2 id="View-Architecture-Fundamentals"><a href="#View-Architecture-Fundamentals" class="headerlink" title="View Architecture Fundamentals"></a>View Architecture Fundamentals</h2><p>通常我们会和 UIView及其子类打交道. <code>UIView</code> 的对象代表屏幕上的一块矩形区域并且处理该区域的<strong>绘制</strong>和<strong>触摸</strong>事件. View 是可以”嵌套”的. views间关系的管理一般都由 UIView 类来处理, 当然我们也可以定制view 的默认行为.</p>
+<p>Views 与 Core Animation 一道处理 view 内容的<strong>渲染</strong>与<strong>动画</strong>. <strong>每一个 view 背后都有一个 layer 对象</strong>(通常是 CALayer 对象), 这个 layer 对象实际管理着 view 的(数据)存储备份以及处理 view 相关的动画. 多数的操作我们都最好通过 UIView 的接口的进行(而不是直接通过 CALayer 的接口来操作). 当然如果你需要更好地把控view 的渲染与动画的话, 我们也可以直接操作 layer 层.</p>
+<p>Core Animation layer对象的使用对性能有较大影响. 实际绘制的代码是最小限度地调用, 绘制结果(数据)会被 Core Animation 缓存并且后续尽可能多的重用. 重用已经渲染过的内容可以减少高昂的 drawing cycle(更新 views 用). 重用/操作已存的内容对动画过程来讲非常重要, 这样就可以减少不必要的创建新内容.</p>
+<h3 id="View-Hierarchies-and-Subview-Management"><a href="#View-Hierarchies-and-Subview-Management" class="headerlink" title="View Hierarchies and Subview Management"></a>View Hierarchies and Subview Management</h3><p>除了可以”展示”自己的内容, view 也可以作为其他 views 的容器. 如果 A 包含 B(即 B作为A的子视图), 那么两者之间便有了关联关系. A 叫 <code>superview</code>, B 叫<code>subview</code>. </p>
+<p>子视图会将父视图的部分或者全部”遮盖”(也受透明度的影响). 每个 superview 都会将其子视图存到一个有序数组中,其顺序直接影响可视度. 数组中最后一个总是显示在最”上面”.</p>
+<p>这个 superview-subview relationship 会对 view 的行为有影响. 改变 superview 的 <strong>size</strong> 会间接地造成其所有 subviews 产生变动. 当改变 superview 的 size 时, 我们也可以通过恰当地”配置” subview 来控制 其resizing behavior.  隐藏 superview, 改变 superview 的 alpha值或者对 superview 的坐标系进行数学变换 也都会影响 subviews.</p>
+<p>views 间的层级关系决定了app 如何响应触控事件. views 也会响应 app events. 比如触摸屏幕某块儿区域, system 就会将此事件相应的信息封装成一个 event object发给对应的 view 处理. 如果这块 view 不处理或不能处理, 就可以将此 event object传递给其 superview, 依次沿着 responder chain 传递. 这个 views 也可以将 event object 传递给”intervening responder object”, 比如 view controller. 如果”没人”处理这个 event, 就会被 application 丢弃掉(即无响应).</p>
+<h3 id="The-View-Drawing-Cycle"><a href="#The-View-Drawing-Cycle" class="headerlink" title="The View Drawing Cycle"></a>The View Drawing Cycle</h3><p><code>UIView</code> 是以”按需绘制”模式(或者叫懒加载)来展示它的内容. 当 view 首次在屏幕上显示时才会去绘制它的内容. system 存储 view 内容的”快照”(其实就是缓存), 只有内容变化时, 绘制代码才会被调用. 我们变动view 的内容时, 要通知 system 这个 view 内容要变动, 需要重新绘制, 重新绘制后 system 就会”捕捉”存储这个 view 新的快照.</p>
+<p>when the contents of your view change, you do not redraw those changes directly. 而是调用<code>setNeedsDisplay</code>或者<code>setNeedsDisplayInRect:</code>方法来 invalidate 这些 views. 这些方法告诉system 这个 view 的 content 有变动, 再重新绘制之前 system 会等到当前的 runloop 结束, 这个时间段我们就有时间 invalidate multiple views,  从 view hierarchy 中添加或移除 views, resize views, reposition views all at once. 然后所有的这些变动就会一下子全展示出来(而不是一步一步变动).</p>
+<ul>
+<li>NOTE: view 的几何变动不会使得 system 自动 redraw view’s content. 我们可以通过<code>contentMode</code>来控制 view 如何进行相应的变动(比如拉伸, 左旋转等). 大多数的 content modes 不会使得绘制新的 view.</li>
+</ul>
+<p>System views 通常都是实现私有绘制方法类渲染其内容. 这些 views 也会暴露一些 interface 让我们来配置 view 的样式. 对于自定义的<code>UIView</code>的 subclasses, 我们通常 override 这个 view 的<code>drawRect:</code>方法来绘制我们 view 的 content. 当然也有其他的方式来 provide view 的 content, 比如直接设置 view 的 layer. 但是<code>drawRect:</code>方法更加常见.</p>
+<h3 id="Content-Modes"><a href="#Content-Modes" class="headerlink" title="Content Modes"></a>Content Modes</h3><p>前面我们说到,每个 view 都有一个<code>content mode</code>来控制其如何应对 view 的几何变动以及是否要回收利用它的 content. 当 view 首次”显示”出来时, 就会绘制其内容然后捕捉”快照”存到一个 bitmap 里. 之后 view 的 几何变动通常不都会导致 bitmap 重新创建,而是由 <code>content mode</code> 控制.</p>
+<p>view 的 content mode 在以下情况下调用:</p>
+<ul>
+<li><p>变动了 view 的 frame/bounds 中的宽高.</p>
+</li>
+<li><p>给 view 的 transform 类的属性赋值(包含放缩因子)</p>
+</li>
+</ul>
+<p>默认地, <code>contentMode</code> property 会被设置为<code>UIViewContentModeScaleToFill</code> 即放缩以填充. content modes 对于能重复利用 view 的 content 很有利. 当然我们也可以设置为<code>UIViewContentModeRedraw</code>, 会强制重新绘制, <code>drawRect:</code>会被调用(我们可以在其中自行实现应对变动).</p>
+<h3 id="Stretchable-Views"><a href="#Stretchable-Views" class="headerlink" title="Stretchable Views"></a>Stretchable Views</h3><p>我们可以设定 view 的某一部分可以放缩, 这样的话, 在 view 的 size 变动时, 只有这一部分会相应地变动, 其他地方不受影响(比如我们设置按钮的时候).  比如 <code>resizableImageWithCapInsets:</code>这个方法就是划定 insets 部分可以放缩, 其他地方不变.</p>
+<h3 id="Built-In-Animation-Support"><a href="#Built-In-Animation-Support" class="headerlink" title="Built-In Animation Support"></a>Built-In Animation Support</h3><p>view 之所以能够做动画, 就是其背后的 core Animation layer 的功劳. UIKit 中的 view的一部分属性 自带基础的动画支持:</p>
+<ul>
+<li>frame</li>
+<li>bounds</li>
+<li>center</li>
+<li>transform</li>
+<li>alpha</li>
+<li>backgroundColor</li>
+<li>contentStretch(废弃, 用resizableImageWithCapInsets:方法替代)</li>
+</ul>
+<p>尤其是在不同组的 views 之间进行切换时, 我们通常会有过度动画, 通常我们会用 view controller 来管理这些动画. 比如导航过度动画, 我们通常用 navigation controller 来切换. 但是如果不满足我们的需求的 话, 我们可以自定义这些动画, 用的就是 Core Animation技术. 详细看 Core Animation Programming Guide 这个.</p>
+<h3 id="View-Geometry-and-Coordinate-Systems"><a href="#View-Geometry-and-Coordinate-Systems" class="headerlink" title="View Geometry and Coordinate Systems"></a>View Geometry and Coordinate Systems</h3><p>UIKit 中的默认坐标系是  左上角为原点, x轴向右增, y 轴向下增; <strong>每个框架有各自的坐标系统</strong>; 除了屏幕坐标系(相对于屏幕的)外, window/view 也有自己的坐标系统来表示相对于 view/window 的坐标关系.  所以在 view 进行绘制/变动的时候, 我们要时刻清楚我们的参考坐标系是哪个.</p>
+<h3 id="The-Relationship-of-the-Frame-Bounds-and-Center-Properties"><a href="#The-Relationship-of-the-Frame-Bounds-and-Center-Properties" class="headerlink" title="The Relationship of the Frame, Bounds, and Center Properties"></a>The Relationship of the Frame, Bounds, and Center Properties</h3><p>这个不一一说了.</p>
+<ul>
+<li>frame</li>
+<li>bounds</li>
+<li>center</li>
+</ul>
+<p>有一点需要注意, 子视图超过 superview的部分默认是会显式出来的, 可以用 clipsToBounds = YES来隐藏调;   但是子视图超出 superview 的部分的 touch event 是不会传递给 superview 的(因为它在 superview 区域外嘛)</p>
+<h3 id="Coordinate-System-Transformations"><a href="#Coordinate-System-Transformations" class="headerlink" title="Coordinate System Transformations"></a>Coordinate System Transformations</h3><p>坐标系变换可以快速地对我们的 view/或者其 content 做修改. 仿射变换是一个数学矩阵(它标明了如何将一个坐标系中的点转换到另一个坐标系). </p>
+<ul>
+<li>如果要变动整个 view, 只需要设置 transform 相关的属性即可;</li>
+<li>如果要在<code>drawRect:</code>中变动一部分, 我们需要设置关联的图形上下文;</li>
+</ul>
+<h2 id="The-Runtime-Interaction-Model-for-Views"><a href="#The-Runtime-Interaction-Model-for-Views" class="headerlink" title="The Runtime Interaction Model for Views"></a>The Runtime Interaction Model for Views</h2><p>从用户点击屏幕到屏幕做相应的视图更新/变动  这过程间发生了什么?</p>
+<ol>
+<li><p>用户点击屏幕;</p>
+</li>
+<li><p>硬件层面将 touch event 报告给 UIKit 框架;</p>
+</li>
+<li><p>UIKit 框架将touch event 打包成 UIEvent 对象然后分发给对应的 view(具体参考 Event Handling Guide for iOS);</p>
+</li>
+<li><p>我们通过 event-handling 方法来相应这些事件, 比如我们可能会这么做:</p>
+<ul>
+<li>改变相应的 view 的一些 properties, 比如 frame, alpha 啦等等;</li>
+<li>调用 <code>setNeedsLayout</code> 方法将此 view 标注为<strong>needing a layout update待更新布局</strong>;</li>
+<li>调用 <code>setNeedsDisplay</code> 或者 <code>setNeedsDisplayInRect:</code>方法将 view/subviews 标注为<strong>需要重绘needing to be redrawn</strong>;</li>
+<li>通知 controller有数据更新了;</li>
+</ul>
+</li>
+<li><p>如果 view 的几何属性变动了, UIKit 会按以下规则更新其 subviews:</p>
+<ul>
+<li>如果view配置了autoresizing 规则, UIKit 会根据规则调整 view(详情查看 Handling Layout Changes Automatically Using Autoresizing Rules.)</li>
+<li>如果 view 实现了<code>layoutSubviews</code>方法, UIKit 会调用它,通常,我们重写这个方法来调整子视图的 position 和 size.</li>
+</ul>
+</li>
+<li><p>如果任何 view 的任何部分被<strong>标记为需要重绘</strong>(调用setNeedDisplay/ setNeedsDisplayInRect:会标记), UIKit 会在下次 runloop 时调用 <code>drawRect</code>方法. 在这个方法里不要有调整 layout相关的, 也不要有调整 data model 的内容. 这个方法的主要目的是更新 view 的visual content.</p>
+</li>
+<li><p>所有的 updated views 都会与其他的 visible content合并然后发送给图形硬件做 display.</p>
+</li>
+<li><p>图形硬件将渲染的内容显示传送到屏幕上.</p>
+</li>
+</ol>
+<blockquote>
+<p>标准的system views 的处理更新过程是这样的. 但是使用 OpenGL ES 来做绘制的通常都是 全屏view 然后直接绘制到关联的 OpenGL ES 上下文中. 这种情况下, view 只处理 touch events. 不再去需要 layout subviews 了. 更多内容可以看 OpenGL ES 编程指南.</p>
+</blockquote>
+<p>前面讲述的步骤中, 我们应对自定义视图主要的入口:</p>
+<ul>
+<li><p>event-handling methods:</p>
+<ul>
+<li><code>touchesBegan:withEvent:</code></li>
+<li><code>touchesMoved:withEvent:</code></li>
+<li><code>touchesEnded:withEvent:</code></li>
+<li><code>touchesCancelled:withEvent:</code></li>
+</ul>
+</li>
+<li><p><code>layoutSubviews</code></p>
+</li>
+<li><p><code>drawRect:</code></p>
+</li>
+</ul>
+<p>这些是我们<strong>主要</strong>(但不是全部)要选择性重写的方法.  如果我们使用 gesture recognizer 处理 touch event 就不需要上述的event-handling methods 了; 如果 view 不包含任何 subviews 或者它的 size 没变, 也没必要重写 layoutSubviews 方法; <code>drawRect:</code>方法只会在我们 view content 变动时且我们用的是native 技术(比如 UIKit, Core Graphics 等)draw 的 , 才派的上用场.</p>
+<h2 id="Tips-for-Using-Views-Effectively"><a href="#Tips-for-Using-Views-Effectively" class="headerlink" title="Tips for Using Views Effectively"></a>Tips for Using Views Effectively</h2><p>自定义视图主要是为了实现我们想要的但是 system view 没有提供的功能/效果, 那么同时我们也需要自己保证自定义 view 的性能.</p>
+<h3 id="Views-Do-Not-Always-Have-a-Corresponding-View-Controller"><a href="#Views-Do-Not-Always-Have-a-Corresponding-View-Controller" class="headerlink" title="Views Do Not Always Have a Corresponding View Controller"></a>Views Do Not Always Have a Corresponding View Controller</h3><p>viewcontroller与 view 并非一一对应的关系, 相反的, 多数情况是 viewcontroller 管理者一众 views及相应的 view hierarchy.</p>
+<p>所以我们设计 App UI 时, 要考虑 viewcontroller 所扮演的角色. view controller 提供了很多重要的方法, 比如定位 view 在 screen的展示, 移除, 在低内存情况下清除内存, 设备方向变动时旋转 view等等. </p>
+<h3 id="Minimize-Custom-Drawing"><a href="#Minimize-Custom-Drawing" class="headerlink" title="Minimize Custom Drawing"></a>Minimize Custom Drawing</h3><h3 id="Take-Advantage-of-Content-Modes"><a href="#Take-Advantage-of-Content-Modes" class="headerlink" title="Take Advantage of Content Modes"></a>Take Advantage of Content Modes</h3><p>使用 content modes 减少花在 redrawing 上的时间. 默认的<code>UIViewContentModeScaleToFill</code> mode 直接放缩现存的 content 而不是花时间redraw, 当然也可以用其他 mode, 但是尽量少用<code>UIViewContentModeRedraw</code> mode. 不论用哪一种 mode, 只要调用<code>setNeedsDisplay</code>或<code>setNeedsDisplayInRect:</code>方法强制 redraw.</p>
+<h3 id="Declare-Views-as-Opaque-Whenever-Possible"><a href="#Declare-Views-as-Opaque-Whenever-Possible" class="headerlink" title="Declare Views as Opaque Whenever Possible"></a>Declare Views as Opaque Whenever Possible</h3><p>尽量少用透明效果; 将view<code>opaque</code>属性设置为 YES即告诉 UIKit无需渲染view 下层的内容, 这样渲染工作量少了, 性能表现就好了.</p>
+<h3 id="Adjust-Your-View’s-Drawing-Behavior-When-Scrolling"><a href="#Adjust-Your-View’s-Drawing-Behavior-When-Scrolling" class="headerlink" title="Adjust Your View’s Drawing Behavior When Scrolling"></a>Adjust Your View’s Drawing Behavior When Scrolling</h3><p>滚动视图滚动时会导致短时间内大量的 content 需要 update. 如果 draw code 写得不好的话, 体验会很差. 我们可以考虑在滚动时不 draw,仅仅 change mode, 在scroll 停止时再 redraw.</p>
+<h3 id="Do-Not-Customize-Controls-by-Embedding-Subviews"><a href="#Do-Not-Customize-Controls-by-Embedding-Subviews" class="headerlink" title="Do Not Customize Controls by Embedding Subviews"></a>Do Not Customize Controls by Embedding Subviews</h3><p>别往 自定义 control上嵌套 subviews, 比如别仅仅想自定义图片大小就 往 button 上嵌套 imageview. 这样不可取</p>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text= id="View-and-Window"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2015/11/07/View-and-Window-Architecture/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

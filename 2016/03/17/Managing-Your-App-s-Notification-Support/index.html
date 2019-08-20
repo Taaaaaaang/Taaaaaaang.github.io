@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>Managing_Your_App&#39;s_Notification_Support | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2016/03/17/Managing-Your-App-s-Notification-Support/">Managing_Your_App's_Notification_Support</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">March 17 2016</p>
+  </section>
+
+  <section class="article-entry">
+    <p>(翻译官方文档)</p>
+<h2 id="Managing-Your-App’s-Notification-Support"><a href="#Managing-Your-App’s-Notification-Support" class="headerlink" title="Managing Your App’s Notification Support"></a>Managing Your App’s Notification Support</h2><p>应用要支持本地/远程通知必须预先配置,而且需要在应用完成启动前就完成注册. 这就意味着必须在<code>application: didFinishLaunchingWithOptions</code>(在WatchOS中是<code>applicationDidFinishLaunching</code>) 执行完之前完成通知的注册.  当然也可以在这个之后注册,前提是在完成注册之前不能有通知发起. 支持远程推送需要额外的配置, 参看<a href>配置远程通知</a>.</p>
+<h3 id="请求与用户交互的授权-即请求注册通知"><a href="#请求与用户交互的授权-即请求注册通知" class="headerlink" title="请求与用户交互的授权(即请求注册通知)"></a>请求与用户交互的授权(即请求注册通知)</h3><p>在iOS, tvOS, 以及watchOS中, 应用要想在有通知内容到达时用一定的方式”<strong>提示</strong>“用户(提示方式如alert,badge,sound)就得请求用户授权.(初始化应用时会有弹出授权对话框,之后可以在设置-&gt;通知里更改设置)</p>
+<p>调用<code>requestAuthorizationWithOptions: completionHandler:</code>来请求授权. 如果所有的请求通知类型都被允许, 系统会回到到<code>completionHandler</code>中且<code>granted</code>参数被置为<code>YES</code>,否则<code>granted</code>就为<code>NO</code>. 示例代码如下:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">Objective-C</span><br><span class="line"></span><br><span class="line">UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];</span><br><span class="line">[center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert + UNAuthorizationOptionSound) </span><br><span class="line">					  completionHandler:^(BOOL granted, NSError * _Nullable error) &#123;</span><br><span class="line">					  // 允许或不允许由granted获取.</span><br><span class="line">					  &#125;];</span><br><span class="line">					  </span><br><span class="line">Swift</span><br><span class="line"></span><br><span class="line">let center = UNUserNotificationCenter.current()</span><br><span class="line">center.requestAuthorization(options: [.alert, .sound]) &#123; (granted, error) in </span><br><span class="line">	// 允许或者不允许由granted获取</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>当应用第一次启动时调用``requestAuthorizationWithOptions: completionHandler:`系统会弹出一个提示框由用户确认是否允许通知提示, 且会将用户的选择存储下来,下次调用此方法就不会在出现提示框了.</p>
+<blockquote>
+<p><strong>NOTE:</strong> 用户可以随时在<code>设置-&gt;通知</code>中更改通知提示类型的设置. 我们可以通过调用<code>getNotificationSettingsWithCompletionHandler:</code>来获取用户实际允许的通知提示类型,以便服务端推送时精确设置提示类型.</p>
+</blockquote>
+<h3 id="配置交互式通知"><a href="#配置交互式通知" class="headerlink" title="配置交互式通知"></a>配置交互式通知</h3><p>交互式通知允许用户直接与通知交互以便执行一些与通知相关的操作(比如此通知有<code>接受</code>,<code>拒绝</code>按钮可以点击). 与普通通知不同的是, 该类通知允许用户不必打开应用就可以直接进行一些操作, 然后按钮就会消失, 点击的按钮会通过相应的API传递到应用中, 开发者就可以进行相应的处理. 这一过程相比原来的通知, 操作更为简洁优雅.</p>
+<p>当然, 要支持这类通知也是需要专门做配置的. 应用启动期间就要完成注册相应的categories来预置通知的类型. 每一个category都与一组action按钮关联(即这些按钮就会在相应category的通知到达时展示出来).  每一个category最多可以与四个按钮关联, 但是实际展示几个取决于通知提示的时机以及方式(比如alert与banner是不同的, banner最多两个).</p>
+<h3 id="注册通知的categories"><a href="#注册通知的categories" class="headerlink" title="注册通知的categories."></a>注册通知的categories.</h3><p>Categories定义了应用支持的通知的类型以及展示出来时如何和系统交互(比如按钮, 回复框以及是否直接打开应用等), 我们使用category将action与通知关联并且配置如何处理这个category类型的通知(比如是否直接打开应用, 在CarPlay应用环境下是否显示等).</p>
+<p>在应用启动时,调用<code>setNotificationCategories:</code>来设置category组. 当然在这之前先要配置好每一个category(可以理解为分组类别,比如不同按钮分组). 示例如下:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">Objective-C</span><br><span class="line"></span><br><span class="line">NNotificationCategory* generalCategory = [UNNotificationCategory</span><br><span class="line">     categoryWithIdentifier:@&quot;GENERAL&quot;</span><br><span class="line">     actions:@[]</span><br><span class="line">     intentIdentifiers:@[]</span><br><span class="line">     options:UNNotificationCategoryOptionCustomDismissAction];</span><br><span class="line"> </span><br><span class="line">// Register the notification categories.</span><br><span class="line">UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];</span><br><span class="line">[center setNotificationCategories:[NSSet setWithObjects:generalCategory, nil]];</span><br><span class="line"></span><br><span class="line">Swift</span><br><span class="line"></span><br><span class="line">let generalCategory = UNNotificationCategory(identifier: &quot;GENERAL&quot;,</span><br><span class="line">                                             actions: [],</span><br><span class="line">                                             intentIdentifiers: [],</span><br><span class="line">                                             options: .customDismissAction)</span><br><span class="line"> </span><br><span class="line">// Register the category.</span><br><span class="line">let center = UNUserNotificationCenter.current()</span><br><span class="line">center.setNotificationCategories([generalCategory])</span><br></pre></td></tr></table></figure>
+
+<p>其中: category的<code>Identifier</code>会在推送远程通知构建Payload时用到, 推送包含某个categoryID,就会有相应的actions按钮显示出来; <code>UNNotificationCategoryOptionCustomDismissAction</code>使得系统告知应用此用户忽略了此通知且并没有点击任何一个自定义的预置按钮.</p>
+<h3 id="添加自定义action按钮到category中"><a href="#添加自定义action按钮到category中" class="headerlink" title="添加自定义action按钮到category中"></a>添加自定义action按钮到category中</h3><p>每一个category可以包含最多四个自定义action按钮. </p>
+<p><strong>整个流程</strong> <code>定义action-&gt;添加到category中的actions中-&gt;附带category的通知到达展示-&gt;相应的action按钮展示出来-&gt;响应的按钮id由system告知App,然后可据此执行相应的预置操作</code>.</p>
+<p><strong>步骤(示例):</strong></p>
+<ol>
+<li>创建按钮并向system注册categories</li>
+</ol>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"> Objective-C</span><br><span class="line">// 创建一个定时通知的actions</span><br><span class="line">UNNotificationAction* snoozeAction = [UNNotificationAction</span><br><span class="line">      actionWithIdentifier:@&quot;SNOOZE_ACTION&quot;</span><br><span class="line">      title:@&quot;Snooze&quot;</span><br><span class="line">      options:UNNotificationActionOptionNone];</span><br><span class="line"> </span><br><span class="line">UNNotificationAction* stopAction = [UNNotificationAction</span><br><span class="line">      actionWithIdentifier:@&quot;STOP_ACTION&quot;</span><br><span class="line">      title:@&quot;Stop&quot;</span><br><span class="line">      options:UNNotificationActionOptionForeground];</span><br><span class="line"> </span><br><span class="line">// 创建一个定时通知category,并与上述actions绑定.</span><br><span class="line">UNNotificationCategory* expiredCategory = [UNNotificationCategory</span><br><span class="line">      categoryWithIdentifier:@&quot;TIMER_EXPIRED&quot;</span><br><span class="line">      actions:@[snoozeAction, stopAction]</span><br><span class="line">      intentIdentifiers:@[]</span><br><span class="line">      options:UNNotificationCategoryOptionNone];</span><br><span class="line"> </span><br><span class="line">// 向system注册通知categories.</span><br><span class="line">UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];</span><br><span class="line">[center setNotificationCategories:[NSSet setWithObjects:generalCategory, expiredCategory,</span><br><span class="line">      nil]];</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">Swift</span><br><span class="line"></span><br><span class="line">let generalCategory = UNNotificationCategory(identifier: &quot;GENERAL&quot;,</span><br><span class="line">                                             actions: [],</span><br><span class="line">                                             intentIdentifiers: [],</span><br><span class="line">                                             options: .customDismissAction)</span><br><span class="line"> </span><br><span class="line">// 创建actions.</span><br><span class="line">let snoozeAction = UNNotificationAction(identifier: &quot;SNOOZE_ACTION&quot;,</span><br><span class="line">                                        title: &quot;Snooze&quot;,</span><br><span class="line">                                        options: UNNotificationActionOptions(rawValue: 0))</span><br><span class="line">let stopAction = UNNotificationAction(identifier: &quot;STOP_ACTION&quot;,</span><br><span class="line">                                      title: &quot;Stop&quot;,</span><br><span class="line">                                      options: .foreground)</span><br><span class="line">// 创建category</span><br><span class="line">let expiredCategory = UNNotificationCategory(identifier: &quot;TIMER_EXPIRED&quot;,</span><br><span class="line">                                             actions: [snoozeAction, stopAction],</span><br><span class="line">                                             intentIdentifiers: [],</span><br><span class="line">                                             options: UNNotificationCategoryOptions(rawValue: 0))</span><br><span class="line"> </span><br><span class="line">//  向system注册通知categories.</span><br><span class="line">let center = UNUserNotificationCenter.current()</span><br><span class="line">center.setNotificationCategories([generalCategory, expiredCategory])</span><br></pre></td></tr></table></figure>
+
+<p>即使对于一个category我们有创建了四个自定义action按钮, 但是system会根据具体用户设置来显示几个(比如banner情况下只会显示前两个action), 所以尽可能地将关联度高的action放在前面.</p>
+<p>当然我们还可以配置可回复的(即带输入框的)action(<code>UNTextInputNotificationAction</code>), 那么当通知显示的时候, 它允许用户回复此通知, 回复的内容将会由系统包装后传递到应用内部, 由相应的API(<code>application:handleActionWithIdentifier:forRemoteNotification:withResponseInfo:completionHandler:</code>)中<code>withResponseInfo</code>为<code>UNTextInputNotificationResponse</code>类型时,对应的key<code>UIUserNotificationActionBehaviorTextInput</code>获取. </p>
+<p>关于如何处理自定义的action, 请查看<a href>Responding to the Selection of a Custom Action</a></p>
+<h3 id="自定义通知铃声"><a href="#自定义通知铃声" class="headerlink" title="自定义通知铃声"></a>自定义通知铃声</h3><p>本地和远程通知可以指定通知的”响声”. 我们可以将声音文件且必须播放时长小于30秒(aiff, wav或者caf类型的)打包到应用bundle中的Library. 由于是由system播放,所以自定义铃声必须是以下声音格式的:</p>
+<ul>
+<li>Linear PCM</li>
+<li>MA4 (IMA/ADPCM)</li>
+<li>μLaw</li>
+<li>aLaw</li>
+</ul>
+<p>比如我们可以使用<code>afconvert</code>工具来将16-bit的 linear PCM系统声音Submarine.aiff转换成IMA4音频格式的CAF文件. 示例:</p>
+<p><code>afconvert /System/Library/Sounds/Submarine.aiff ~/Desktop/sub.caf -d ima4 -f caff -v</code><br>获取更多关于将声音文件与通知关联, 参考<a href>Adding a Sound to the Notification Content</a>.</p>
+<h3 id="管理应用的通知提示设置"><a href="#管理应用的通知提示设置" class="headerlink" title="管理应用的通知提示设置"></a>管理应用的通知提示设置</h3><p>因为用户是可以设置通知提示设置的, 所以我们可以在任何时候通过<code>getNotificationSettingsWithCompletionHandler:</code> 来具体获取用户实际授权的通知提示设置. 这样在推送的时候就可以有根据恰当地构造远程通知的Payload或者本地通知的内容.</p>
+<h3 id="管理通知"><a href="#管理通知" class="headerlink" title="管理通知"></a>管理通知</h3><p>当本地或者远程通知还没有被用户处理的话, 它们会显示在系统通知中心. 使用<code>getDeliveredNotificationsWithCompletionHandler:</code>来列出本应用所有的显示在当前通知中心的通知. 如果有任何通知已经过期且不再适合显示给用户, 我们可以通过<code>removeDeliveredNotificationsWithIdentifiers:</code>移除它们.</p>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text=(翻译官方文档)</p>
+<h2 id="
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2016/03/17/Managing-Your-App-s-Notification-Support/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

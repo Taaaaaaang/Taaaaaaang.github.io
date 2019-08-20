@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>APNs_Overview | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2016/03/17/APNs-Overview/">APNs_Overview</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">March 17 2016</p>
+  </section>
+
+  <section class="article-entry">
+    <p>(官方文档的翻译)</p>
+<p>Apple Push Notification service(APNs) 是远程通知的重要部分. 它是一项为iOS(间接地watchOS), tvOS, macOS设备稳定高效地推送信息的服务. 你的应用一旦初始化启动(有推送功能), 便与APNs建立了认证加密的连接. 之后, APNs就可以通过此连接向设备推送. 即使通知到达设备时app没有运行, system也会将通知适时地投递到相应的app.</p>
+<p>不仅需要APNs以及你的app, 我们还需要对我们的推送服务器(这里叫provider,与APNs交互)做相应的配置, 我们的provider负责:</p>
+<ul>
+<li>收集手机app回传回来的device token以及其他相关数据;</li>
+<li>将要推送的内容发给APNs, 然后APNs负责将内容推送到设备;</li>
+</ul>
+<p>具体到每一条远程通知, 我们的provider:</p>
+<ol>
+<li>将要推送的通知的payload构造为JSON结构的数据(<a href>Creating the Remote Notification Payload</a>);</li>
+<li>结合payload附带device token构造一个HTTP/2 的请求;</li>
+<li>发送上述https请求.</li>
+</ol>
+<p>对于每一个成功的HTTP/2的请求, APNs都会将对应的通知推送到用户设备.</p>
+<p>我们的推送服务商负责生成远程通知的内容. 当我们要推送远程通知时, 我们将要推送的内容告知provider, 它将内容打包成JSON数据到payload附带<strong>有效的</strong>device token, 通过与APNs建立的HTTP/2连接发送推送请求, 然后APNs将相应的payload投递到设备. <strong>如图</strong><a href></a></p>
+<p>每一个推送请求中的<em>device token</em>代表设备的ID. APNs用device token来识别某台设备上的某个应用. 应用每次启动, 都会索取这个device token, 然后将之回传到我们的推送服务商(provider). provider 存储这个device token然后使用它通过APNs给我们的设备推送通知. device token本身是透明稳定的(即我们无法解读的加密数据),只会在设备数据被擦除(比如此应用卸载,设备刷机)才会变化, 也只有APNs才能解密读取其包含的相关信息.</p>
+<h3 id="QoS-存储与发送以及合并通知"><a href="#QoS-存储与发送以及合并通知" class="headerlink" title="QoS, 存储与发送以及合并通知"></a>QoS, 存储与发送以及合并通知</h3><p>Apple Push Notification service 包含一个Quality of Service(QoS)模块来实现存储和发送(通知)的功能. 如果APNs尝试向一个离线(没有网络)的设备推送一条通知, APNs会将其存储一段时间, 并在设备上线(网络OK)时将存储的那条通知送达设备. <strong>注意, 这个模块只会为单个设备的单个应用存储最新的一条通知</strong>. 也就是说, 如果设备离线期间向这个app推送多条通知, 那么新的会将旧的覆盖(即所谓只为某个设备的某个app存储一条离线通知). 如果离线时间过长, 为这个设备存储的所有通知都将丢弃.</p>
+<p><code>apns-collapse-id</code>用来标记你发送的相似的内容的通知, 比如新闻标题一样的两条通知,我们就可以将其<code>apns-collapse-id</code>设置为一样的, APNs发送时会将两者合并(目前有点模糊, 有啥用).</p>
+<h3 id="安全架构"><a href="#安全架构" class="headerlink" title="安全架构"></a>安全架构</h3><p>在保证通信安全方面, APNs的服务器有使用连接证书, CA证书和加解密的密钥(公/私钥)来确保与provider和设备的连接安全. APNs在中间从两个层级控制着provider 到 设备的入口: connection trust和 device token trust.</p>
+<p><em>Connection trust</em> 确保了连接APNs的provider是可信任的(通过服务端推送证书)以及连接APNs的设备是合法的(设备上应用中的数字签名). 后者由APNs自动完成.</p>
+<p><em>Device token trust</em> 确保通知是在合法的起点(Provider)与终点(设备)间路由. device token对于我们来说是透明不可解读的, 用来识别特定设备上的特定应用的唯一标识符(它由应用向APNs注册时获取),所以我们得把它给到通知的起点Provider(推送服务商)以便我们推送的准确投递.</p>
+<h3 id="Provider-to-APNs-Connection-Trust"><a href="#Provider-to-APNs-Connection-Trust" class="headerlink" title="Provider-to-APNs Connection Trust"></a>Provider-to-APNs Connection Trust</h3><p>目前Provider有两种方式可以用来与APNs在连接层面安全通信:</p>
+<ul>
+<li><strong>基于Token(注意不是device token哦)的connection trust</strong> provider使用基于HTTP/2的API可以使用<code>JSON web tokens(JWT)</code>来与APNs建立认证连接(这样服务端就不用推送证书了). 而是我们给苹果一个公钥,我们保留私钥. provider使用私钥来生成并加签的 <em>authentication tokens</em>. 每一个push 请求都必须要包含一个 authentication token.</li>
+<li><strong>基于证书的connection trust</strong> provider也可以使用证书(由开发者在Apple开发者中心申请生成).</li>
+</ul>
+<h3 id="Token-Based-Provider-to-APNs-Trust"><a href="#Token-Based-Provider-to-APNs-Trust" class="headerlink" title="Token-Based Provider-to-APNs Trust"></a>Token-Based Provider-to-APNs Trust</h3><ol>
+<li>Provider请求与APNs建立tls连接;</li>
+<li>APNs会给provider一个APNs证书(通信公钥), provider认证, 这之后connection trust就建立起来了,provider就可以发送远程通知了;</li>
+<li>每一条通知都会附带一个JWT authentication token;</li>
+<li>APNs 会针对每一条push都会有一个response.</li>
+</ol>
+<p><img src="https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Art/service_provider_ct_2x.png" alt="Establishing and using token-based connection trust between a provider and APNs"></p>
+<blockquote>
+<p>注: 要与APNs建立TLS会话, 必须确保provider安装了GeoTrust Global CA根证书. 如果服务器是macOS的, 根证书已经预安装在钥匙串里了.</p>
+</blockquote>
+<p>基于HTTP/2的 provider可以往哪些应用推送通知, 是由推送证书中的topic(即app的bundleID)决定.</p>
+<p>APNs会维护一个证书吊销列表; 如果provider的推送证书在吊销列表中, APNs就可以断开/拒绝 TLS连接的建立.</p>
+<h3 id="Certificate-Based-Provider-to-APNs-Trust"><a href="#Certificate-Based-Provider-to-APNs-Trust" class="headerlink" title="Certificate-Based Provider-to-APNs Trust"></a>Certificate-Based Provider-to-APNs Trust</h3><ol>
+<li>Provider请求与APNs建立tls连接;</li>
+<li>APNs会给provider一个APNs证书(通信公钥), provider认证.</li>
+<li>Provider 必须将Apple-provisioned provider certificate 返给APNs;</li>
+<li>APNs接收认证provider发来的证书,确认建立连接,就可以发送通知了,会针对每一条push都会有一个response.</li>
+</ol>
+<p><img src="https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Art/service_provider_ct_certificate_2x.png" alt="Establishing and using token-based connection trust between a provider and APNs"></p>
+<p>以上两种方式都是只能是针对单个应用的,(即推送证书认证或者token认证不是应用共享的).</p>
+<h3 id="APNs-to-Device-Connection-Trust"><a href="#APNs-to-Device-Connection-Trust" class="headerlink" title="APNs-to-Device Connection Trust"></a>APNs-to-Device Connection Trust</h3><p>APNs与设备间的”互相信任”是有设备一旦激活就自动建立的.</p>
+<p>每个设备都有一个证书(就是认证过的公钥)和私钥, 在设备初始化激活的时候获取的存储在钥匙串里. 激活之后, APNs就会根据证书和私钥来与设备进行p2p认证连接. 如图:</p>
+<p><img src="https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Art/service_device_ct_2x.png" alt="Establishing connection trust between a device and APNs"></p>
+<p>设备与APNs间的TLS连接一旦建立, APNs就会在设备注册推送的时候返给设备一个device token.</p>
+<h3 id="Device-Token-Generation-and-Dispersal"><a href="#Device-Token-Generation-and-Dispersal" class="headerlink" title="Device Token Generation and Dispersal"></a>Device Token Generation and Dispersal</h3><p>当需要新的device token时, APNs会根据设备上的证书包含的信息来生成. 然后它会将这个token加密后返给设备. 设备收到后, system会将device token包装为一个<code>NSData</code>对象给到我们的app. 一旦收到token, 我们app就要把它以二进制或者十六进制格式回传到provider. </p>
+<p><img src="https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Art/token_generation_2x.png" alt="Managing the device token"></p>
+<blockquote>
+<p>注: APNs生成的device token的长度是会变动的. 不要硬编码其长度.</p>
+</blockquote>
+<h3 id="Device-Token-Trust-for-Notifications"><a href="#Device-Token-Trust-for-Notifications" class="headerlink" title="Device Token Trust for Notifications"></a>Device Token Trust for Notifications</h3><p>每条provider发送给APNs的通知必须附带device token. APNs 使用token key解密device token,以确保通知源(即Provider)的合法性. APNs使用device token中包含的device ID来”定位”到目标设备. 如图:</p>
+<p><img src="https://developer.apple.com/library/content/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Art/token_trust_2x.png" alt="Identifying a device using the device token"></p>
+<h3 id="Provisioning-Procedures"><a href="#Provisioning-Procedures" class="headerlink" title="Provisioning Procedures"></a>Provisioning Procedures</h3><p>APNs(苹果推送通知服务)都哪些设备/app可以用?</p>
+<p>在App Store 发布的应用以及企业应用都可以使用. 首先我们的app必须实现配置和签名. 详情查看推送权限及证书的申请.</p>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text=(官方文档的翻译)</p>
+<p>App"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2016/03/17/APNs-Overview/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

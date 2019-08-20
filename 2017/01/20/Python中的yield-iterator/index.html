@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>Python中的yield&amp;&amp;iterator | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2017/01/20/Python中的yield-iterator/">Python中的yield&&iterator</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">January 20 2017</p>
+  </section>
+
+  <section class="article-entry">
+    <p>最近有在用 Python 做点东西, 接触一门新语言后, 大概你会有这么一句想脱口而出, ‘卧槽原来还可以这么干?’  先写个小随笔</p>
+<h1 id="在Python中什么时候用yield"><a href="#在Python中什么时候用yield" class="headerlink" title="在Python中什么时候用yield ?"></a>在Python中什么时候用yield ?</h1><p>yield 声明会将函数运行轨迹’挂起’, 然后将值发送给caller, 并且保留’一定的’状态使得函数能够从其挂起的地方’恢复’运行. 恢复运行的函数会立即从上次yield的地方执行. 这就允许逐次产生一系列的值, 而不是一次计算完将结果列表返回. 举个🌰:</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># A Simple Python program to demonstrate working of yield</span></span><br><span class="line"><span class="comment"># A generator function that yields 1 for first time, 2 second time and 3 third time.</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">simpleGeneratorFun</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="keyword">yield</span> <span class="number">1</span></span><br><span class="line">    <span class="keyword">yield</span> <span class="number">2</span></span><br><span class="line">    <span class="keyword">yield</span> <span class="number">3</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Driver code to check above generator function</span></span><br><span class="line"><span class="keyword">for</span> value <span class="keyword">in</span> simpleGeneratorFun():</span><br><span class="line">    print(value)</span><br><span class="line"></span><br><span class="line">&gt; Output:</span><br><span class="line"> <span class="number">1</span></span><br><span class="line"> <span class="number">2</span></span><br><span class="line"> <span class="number">3</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>Return</strong>是将值返给其调用者(caller), 而<strong>Yield</strong>可以生成值的序列. 我们应当在我们需要迭代序列时使用yield, 而不是存储整个序列值的时候.</p>
+<p><strong>Yield</strong>通常用在Python生成器(generator)中. generator样子和函数类似, 关键区别在于generator返回值是用yield而不是return. 如果函数体内存在yield, 那么它就是一个generator function.</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 下面是一个使用generator生成1-10的平方的数字序列 的程序</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">nextSquare</span><span class="params">()</span>:</span></span><br><span class="line">    i = i;</span><br><span class="line">    <span class="keyword">while</span> <span class="literal">True</span>:</span><br><span class="line">        <span class="keyword">yield</span> i*i</span><br><span class="line">	i += <span class="number">1</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> num <span class="keyword">in</span> nextSquare():</span><br><span class="line">    <span class="keyword">if</span> num &gt; <span class="number">100</span>:</span><br><span class="line">        <span class="keyword">break</span></span><br><span class="line">    print(num)</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">&gt; Output:</span><br><span class="line"> <span class="number">1</span></span><br><span class="line"> <span class="number">4</span></span><br><span class="line"> <span class="number">9</span></span><br><span class="line"> <span class="number">16</span></span><br><span class="line"> <span class="number">25</span></span><br><span class="line"> <span class="number">36</span></span><br><span class="line"> <span class="number">49</span></span><br><span class="line"> <span class="number">64</span></span><br><span class="line"> <span class="number">81</span></span><br><span class="line"> <span class="number">100</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="Python中的Iterators"><a href="#Python中的Iterators" class="headerlink" title="Python中的Iterators"></a>Python中的Iterators</h1><p>任何在Python中用’for in’循环的类型都可以叫做Iterator. 内建的类型比如lists, tuples, dicts, sets等等, 因为它们都实现了以下几个方法(事实上, 任何想要成为Iterator的类型都要实现):</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="number">1.</span> __iter__ 在初始化的时候调用. 这个方法会返回一个带有**next**或者**__next__**方法.</span><br><span class="line"><span class="number">2.</span> next/__next__ 方法应返回下一个迭代值. 当iterator在 <span class="keyword">for</span> <span class="keyword">in</span> 循环中时, <span class="keyword">for</span>循环会默认地调用iterator对象的next()/__next__()方法.</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Test</span>:</span></span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self, limit)</span>:</span></span><br><span class="line">    	self.limit = limit</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__iter__</span><span class="params">(self)</span>:</span></span><br><span class="line">    	self.x = <span class="number">10</span></span><br><span class="line">	<span class="keyword">return</span> self</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">next</span><span class="params">(self)</span>:</span></span><br><span class="line">    	x = self.x</span><br><span class="line">	<span class="keyword">if</span> x &gt; self.limit:</span><br><span class="line">	   <span class="keyword">raise</span> StopIteration</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> x</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> i <span class="keyword">in</span> Test(<span class="number">15</span>):</span><br><span class="line">    print(i)</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> i <span class="keyword">in</span> Test(<span class="number">5</span>):</span><br><span class="line">    print(i)</span><br></pre></td></tr></table></figure>
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text=最近有在用 Python 做点东西, 接"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2017/01/20/Python中的yield-iterator/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

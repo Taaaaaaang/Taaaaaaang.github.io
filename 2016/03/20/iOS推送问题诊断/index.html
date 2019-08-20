@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>iOS推送问题诊断 | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2016/03/20/iOS推送问题诊断/">iOS推送问题诊断</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">March 20 2016</p>
+  </section>
+
+  <section class="article-entry">
+    <h1 id="推送问题诊断"><a href="#推送问题诊断" class="headerlink" title="推送问题诊断"></a>推送问题诊断</h1><ul>
+<li><a href="#1">简介</a></li>
+<li><a href="#2">接收通知的问题</a></li>
+<li><a href="#3">推送通知的问题</a></li>
+<li><a href="#4">其他</a></li>
+</ul>
+<h2 id="1">简介</h2>
+
+<p>许多iOS应用会通过网络送达手机一些动态内容,我们常见的推送（即远程通知）即一种用来<strong>告知</strong>用户有新的信息或关注的内容可以更新的一种有效途径。</p>
+<h2 id="2">接收通知的问题</h2>
+
+<h3 id="注册推送"><a href="#注册推送" class="headerlink" title="注册推送"></a>注册推送</h3><p>为了能够接收推送，应用本身必须先要向APNs（Apple Push Notification service）注册。从代码层面讲需要分三步</p>
+<ol>
+<li><p>调用 <code>registerUserNotificationSettings:</code> 方法来询问用户接收通知的配置(即如何提示)</p>
+</li>
+<li><p>然后调用<code>registerForRemoteNotifications:</code>来向 APNs注册远程通知.</p>
+</li>
+<li><p>实现<code>application:didRegisterForRemoteNotificationsWithDeviceToken：</code>（遵循UIApplicationDelegate协议）方法来获取由APNs返回的唯一的deviceToken。</p>
+</li>
+<li><p>实现<code>application:didFailToRegisterForRemoteNotificationsWithError：</code>（遵守UIApplicationDelegate协议）方法来获取如果注册失败由APNs返回的错误</p>
+</li>
+</ol>
+<p>然后将device token 回传给推送服务商(即我们推送平台)，然后由其将内容推送到手机应用。</p>
+<p>注册推送是比较直观的，但是有一些重要的细节需要我们注意：</p>
+<h5 id="没有代理回调"><a href="#没有代理回调" class="headerlink" title="没有代理回调"></a>没有代理回调</h5><p>当手机上第一个开启推送功能的app安装后，iOS系统就会与APNs建立一个所有注册推送应用共享的长连接。如果<code>application:didRegisterForRemoteNotificationsWithDeviceToken:</code>和 <code>application:didFailToRegisterForRemoteNotificationsWithError:</code>均未被调用，那么意味着长连接连接还未建立。</p>
+<p>这实际上不能算作错误，因为可能手机根本就没有网络连接。这种情况下, 我们就要恰当地处理下与通知相关的逻辑与功能.</p>
+<p>我们要清楚的一点是可用的网络可能会频繁地变化。一旦有稳定的网络确保推送服务的连接成功，那么前面提到的代理回调方法就会被调用。</p>
+<p>如果手机的蜂窝网络以及WiFi同时开启，推送服务依然会<strong>优先</strong>选择使用蜂窝网络。如果只使用了WiFi要确保所连接的网络端口5223通畅。</p>
+<blockquote>
+<p>对于不同的『推送环境』，系统会建立不同的连接，开发状态对应使用sandbox（对应 Apple 推送的一套测试环境）推送环境，而ad hoc(in-house) 和 发布状态(distribution)对应使用生产的推送环境。</p>
+</blockquote>
+<h5 id="错误代理回调"><a href="#错误代理回调" class="headerlink" title="错误代理回调"></a>错误代理回调</h5><p>当具有推送功能的应用首次运行时，iOS系统会询问是否接收推送通知。如果没有提示，那么有可能应用权限(entitlements)文件中没有 aps-enviroment权限，它是从编译应用时使用的provisioning profile获取的，它控制着app使用哪一种推送环境（即使用sandbox或者生产推送环境）。所以我们需要<code>application:didFailToRegisterForRemoteNotificationsWithError:</code>方法来确认推送服务是否可用，或者我们可以使用以下命令来检查app的推送权限。解压ipa文件获取到Payload文件夹。</p>
+<p><code>$ codesign -d --entitlements :- &quot;Payload/YourApp.app&quot;</code></p>
+<p>如果没有aps-environment权限，那么请检测工程的签名。查看描述文件provisioning profile的内容是否有aps-environment权限，若没有，那么就是你没有为App ID配置推送或者你使用的是旧的描述文件provisioning profile。</p>
+<h5 id="注册成功但是没有收到推送"><a href="#注册成功但是没有收到推送" class="headerlink" title="注册成功但是没有收到推送"></a>注册成功但是没有收到推送</h5><p>如果你的app注册了推送服务但是没有收到推送，那么问题既可能在客户端，也可能在服务端：</p>
+<ul>
+<li><p>设备可能没有稳定的网络连接且不能重连推送服务。尝试这退出应用并重新启动应用来查看推送有没有注册成功。（iOS4及之后设备支持多任务处理，你可能需要从应用历史清单中强制退出应用），如果在稳定的网络连接下没有成功注册推送，那么你可以参考前两部分来分析问题所在。</p>
+</li>
+<li><p>app可能回传了错误的deviceToken给了推送提供商。所以从来都不要存储devicetoken并重用它，因为token随时都可能变化的。要确保你给推送服务商的token是最新的。</p>
+</li>
+</ul>
+<p>推送服务能够根据在你TLS/SSL证书中的User ID属性 得知哪一个应用支持接收推送。iOS系统会向 其CFBundleIdentifier匹配这个属性的应用传递推送。</p>
+<h5 id="部分收到推送"><a href="#部分收到推送" class="headerlink" title="部分收到推送"></a>部分收到推送</h5><p>如果你在短时间内向同一台设备的推送多个通知，APNs只会发送最后一条。设备在收到每一条推送都会去确认，即通知服务器<code>我收到啦</code>。直到服务器收到回执这段期间，它只能认为设备离线并且将通知存到QoS队列里以待重新<code>投递</code>。这一来一回的延迟会是导致部分收到的而非全部。</p>
+<p>正如Local and Push Notification Programming Guide中所描述的那样，QoS队列仅仅为单台设备的单个应用保留一条推送，如果队列中的一条还未发送服务器又收到一条，那么新的推送就会<code>冲掉</code>前一个。</p>
+<p>上述种种强调推送的目的是为了指明服务端有新的内容更新，app应当去服务器更新内容。推送不要包含敏感信息。</p>
+<p>由于网络原因没有立即『投递』 的推送都会在将来重新投递。这里所说的『立即』也要考虑网络的延迟。</p>
+<h2 id="3">推送通知的问题</h2>
+
+<p>如果应用没有收到推送，并且一切看起来正常，我们就关注下服务器端。</p>
+<h5 id="连接APNs"><a href="#连接APNs" class="headerlink" title="连接APNs"></a>连接APNs</h5><ul>
+<li><p>确保端口没有被屏蔽：</p>
+<ul>
+<li>若推送环境为开发： telnet gateway.sandbox.push.apple.com 2195</li>
+<li>若推送环境为生产： telnet gateway.push.apple.com 2195</li>
+</ul>
+</li>
+<li><p>确保你的推送服务器能连接上APNs。你需要连接APNs的合法证书。<br>你除了需要安装推送用的SSL证书，还需要安装Entrust CA (2048)根证书。你可以从<br><a href="https://www.entrust.net/downloads/binary/entrust_2048_ca.cer" target="_blank" rel="noopener">这里</a><br>下载。确认你已经安装到合适的路径并且有权限读取。</p>
+</li>
+</ul>
+<p>你可以使用以下命令测试下TLS/SSL握手：</p>
+<p><code>openssl s_client -connect gateway.sandbox.push.apple.com:2195 -cert YourSSLCertAndPrivateKey.pem -debug -showcerts -CAfile server-ca-cert.pem</code></p>
+<p>这里的server-ca-cert.pem即Entrust CA (2048)证书。确认SSL的ID以及hostname对应你要测试的推送环境。你可以在你的开发者中心分别配置你的sandbox和生产用的SSL证书。</p>
+<p>确认SSL推送证书与相应的推送环境、App打包时bundleID三者匹配是推送成功的前提。另外，那个CAfile参数就是前面提到的Entrust CA（2048）用来核对服务器端的证书的。</p>
+<p>如果你仍然无法同APNs建立连接，也有可能是证书过期，通常生产换环境的推送证书是一年的有效期。</p>
+<p>还有可能是因为过于频繁地开闭连接到APNs，这样可能造成APNs将其当做恶意行为而主动断开连接（通常一段时间后才可以重连）。建议开发者连接成功后保持连接而不要自行主动断开。</p>
+<h5 id="处理多中格式的推送。"><a href="#处理多中格式的推送。" class="headerlink" title="处理多中格式的推送。"></a>处理多中格式的推送。</h5><p>简单格式的推送会因为推送服务（APNs）接收一条不合规的推送而导致连接直接断开。第三方推送服务商可能会得到 <strong>EPIPE</strong> 或者 <strong>broken pipe error</strong>这样的返回。而加强型推送格式在连接断开之前会得到更为具体的错误反馈，从而可以捕捉并合理处理这些情况。（关于这两种格式会在另一篇文档中说明）</p>
+<p>许多第三方推送服务商会直接无视反馈的错误或直接断开连接。我们可以用简单的方式来测试，使用测试环境的token推向生产环境，这样APNs就会返回 <em>invalid token</em>并且直接断开连接。</p>
+<p>常见的问题在于invalid token。不同推送环境产生的token是不同的。向包含invalid token的设备是无法推送的。</p>
+<blockquote>
+<p>建议将推送环境分开避免发送token到错误的环境。</p>
+</blockquote>
+<p>用户可能会从设备上删除应用（意味着对应的token已经无效了），所以最好至少check一下feedback service，频率最少一天一次。</p>
+<p>另一种可能就是发送的内容『体积』过大（&gt;2048 bytes），或者你的payload无法正确地格式化，亦或你的JSON字典语法错误。</p>
+<p>偶发的<strong>被断开连接</strong>的情形可能是 推送服务商此条连接闲置，这时你需要重连。如果APNs的某台server宕机了，会有相应的机制无痛地将你的新连接连到另一台服务器（前提是你连接APNs时使用域名而非IP）。</p>
+<h5 id="使用Feedback-Service的问题"><a href="#使用Feedback-Service的问题" class="headerlink" title="使用Feedback Service的问题"></a>使用Feedback Service的问题</h5><p>如果你将设备上App卸载然后向这个设备推送，你会期望这个token将会被拒，并且这个token会出现在feedback service的列表中。然而如果被卸载的这个app是这个设备上最后一个有推送功能的app，那么这个token将不会出现在feedback列表中。这是因为删除了仅存的有推送功能的App会导致推送服务的长连接被干掉而不能知会给服务器（APNs）。</p>
+<h2 id="2">其他</h2>
+
+<h5 id="推送错误检测"><a href="#推送错误检测" class="headerlink" title="推送错误检测"></a>推送错误检测</h5><p>APNs对于推送使用是没有限制的。</p>
+<p>每秒低于90000条的推送量，推送服务商会因此在错误处理逻辑方面受惠。</p>
+<p>使用加强版的推送格式，我们可以更好地处理推送中出现的错误。持续写入直到写入失败，然后等到<strong>流</strong>可以继续写，我们就重发（因为写入失败后通过反馈我们可以知道从哪条开始发送失败）。</p>
+<p>尽可能地读入<strong>流</strong>，如果读到的是空，即连接因某种原因（不合规则的command bytes或者其他解析错误）被断开。如果你读到6个字节的response，我们就可以根据错误码以及notification的ID来分析，然后从推送队列中发送失败那条推送重发。</p>
+<p>一批发送完成后，注意check一下错误反馈。</p>
+<p>由于断掉连接也是需要时间的（而要知道APNs读端已经断开也是需要时间的），所以有可能在这个时间段内500个推送已经出去了，或者我写入时『管道』饱和，而我知道这种情况时1700个推送又出去了，所以一旦可以继续写<strong>数据流</strong>，我们就可以根据分析的错误码从出错位置立即重发。</p>
+<p>你可以发一条推送然后立即check得到response，但是如果需要推送的量大的化，这样做就会比较耗时，所以需要自己权衡一下。</p>
+<p>如果devicetoken是有效且推送到正确的环境，那么发送失败的情况就会很少发生，这一点我们可以充分自信。持续写直到写入失败或者直到一批推送完成，我们再去check 推送错误的response，甚至我们去定时重发，这样都会使得你的推送整体性能提升。 这些策略并不仅限于APNs，而是socket编程通用策略。</p>
+<p>如果你选择的开发『工具』支持多线程或者进程间通信，你可以专门分配一个线程或者进程负责监听错误response来通知主要发送线程或进程什么时候该停止什么时候该重试发送。</p>
+<h5 id="APNs的IP段"><a href="#APNs的IP段" class="headerlink" title="APNs的IP段"></a>APNs的IP段</h5><p>推送流程中设备终端及推送服务器可能都被防火墙与外界隔开，所以第三方推送服务器要确保2195端口TCP包进出通畅，同时使用feedback service要确保2196端口TCP包进出通畅。 同时连接WiFi的终端设备要确保5223端口TCP包进出通畅。</p>
+<p>APNs的IP网段会变动，所以第三方推送服务商要使用APNs的域名来推送给APNs，整个17.0.0.0/8 网段都是Apple的。所以你可以在防火墙规则里面来做相应定制。</p>
+<p>（翻译自Apple文档）</p>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text= id="推送问题诊断"><a href"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2016/03/20/iOS推送问题诊断/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

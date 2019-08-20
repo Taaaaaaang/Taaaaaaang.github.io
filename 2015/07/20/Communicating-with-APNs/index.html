@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>Communicating_with_APNs | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2015/07/20/Communicating-with-APNs/">Communicating_with_APNs</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">July 20 2015</p>
+  </section>
+
+  <section class="article-entry">
+    <p>最进好像Apple又要更新APNs服务了, 启用全新的基于HTTP/2的 APNs协议(不再是以前的二进制接口协议了), HTTP/2不明白的就去 Google , 新的协议有各种加强, 不管是 payload 大小还是推送的稳定性, 还有接口都是全新的, 那可苦了我们 push 平台了…  还能咋办嘛, 赶紧研究下呀, 后端实现细节就不透露了, 这里只翻译下文档, 也好给后端同学看下, 免得又是收不到通知就找我😂。。。</p>
+<p>(翻译部分官方文档)</p>
+<h1 id="APNs-Provider-API"><a href="#APNs-Provider-API" class="headerlink" title="APNs Provider API"></a>APNs Provider API</h1><p>Apple推送服务包括服务端的APNs Provider API(当然还包括客户端部分), 它允许我们向iOS, tvOS, 以及OS X的设备发送远程通知,也可以经由iOS到Apple Watch上. 这一套API是基于HTTP/2网络协议(有什么优势自行查阅). 每次与APNs交互都是POST一个包含JSON负载Payload(包含推送内容)的request. 然后APNs就将相应的Notification投递给特定的用户设备上.</p>
+<p>我们使用APNs推送证书(由Apple开发者账户创建生成)来与APNs相应的推送环境(sandbox和production)建立连接.</p>
+<p>我们使用APNs推送证书向手机端的应用(以bundleID来区分)推送内容. 用证书里面的 <code>( 1.2.840.113635.100.6.3.6 )extension</code>作为某条推送topic的ID. 比如, 如果我们有一个应用的bundleID为<code>com.yourcompany.yourexampleapp</code>, 我们就可以指定以下证书中的topics:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">Extension ( 1.2.840.113635.100.6.3.6 )</span><br><span class="line">Critical NO</span><br><span class="line">Data com.yourcompany.yourexampleapp</span><br><span class="line">Data app</span><br><span class="line">Data com.yourcompany.yourexampleapp.voip</span><br><span class="line">Data voip</span><br><span class="line">Data com.yourcompany.yourexampleapp.complication</span><br><span class="line">Data complication</span><br></pre></td></tr></table></figure>
+
+<p>##Connections</p>
+<p>推送远程通知的第一步是与对应的APNs服务器(APNs的测试服和生产服)建立连接:</p>
+<ul>
+<li>Development server:api.development.push.apple.com:443</li>
+<li>Production server:api.push.apple.com:443</li>
+</ul>
+<blockquote>
+<p>注意: 我们也可以选择性地使用2197端口来与APNs通信.那么在什么情况下呢?比如在有墙的情况下,我们可以只允许APNs通过而屏蔽其他HTTPS传输(因为443端口是HTTPs通信端口,其他HTTPs服务也可能用到).</p>
+</blockquote>
+<p>我们的服务端要连接APNs就必须支持TLS1.2或者更高版本的安全传输协议, 并且连接必须经过推送证书的认证(即使用证书建立连接).</p>
+<p>APNs服务允许在一个连接使用多个并发的流(一个http2连接上可包含多个并发打开的流,它们排在一个连接上进行传输,详细参看HTTP 2.0的多路复用特性),  那么多少个合适呢?这基于服务器的负载能力.另外需要注意的是APNs<strong>无视</strong>HTTP2.0中的PRIORITY参数(数据流的优先级)</p>
+<p>###管理连接的最优做法</p>
+<p>推送多条通知的过程中保持连接open状态;不要反复open/close连接,这样的话APNs会假定为Dos攻击(denial-of-service attack)而断开连接. 除非你确信某段时间连接会空闲(比如你每天就给用户发一条推送,那么发完你就可以主动断开),否则最好一直保持连接的open状态.</p>
+<p>APNs允许使用一个证书建立多个连接来提升推送的效率. 如果有较大量级的推送, 那么就可以将它们分配到多个服务器上通过多个连接推送.</p>
+<p>我们可以使用HTTP/2中的 PING数据帧来检测连接的health状况,即心跳检测.</p>
+<p>###终止连接</p>
+<p>如果APNs决定断掉某一条HTTP/2连接,它会发送一个<code>GOAWAY</code>的frame. 这个frame中的JSON数据包中<code>reason</code>对应的值就是含有断掉的原因(详细的在本文后面的表格中).  通常的request失败是不会导致连接终止掉的.</p>
+<p>##Notification API</p>
+<p>APNs Provider API 由一个request 和一个response组成, 我们可以使用它们来配置然后使用一个HTTP/2的<code>POST</code>指令发送一个远程通知. 所以基本上就是组装一个request发送推送给APNs,然后根据response来处理request的结果.</p>
+<p>###Request</p>
+<p>用于发送通知到特定设备的request, 如表格一个HTTP/2的request</p>
+<table>
+<thead>
+<tr>
+<th align="left">Name</th>
+<th align="center">Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">:method</td>
+<td align="center">POST</td>
+</tr>
+<tr>
+<td align="left">:path</td>
+<td align="center">/3/device/&lt;device-token&gt;</td>
+</tr>
+</tbody></table>
+<p>表中的&lt;device-token&gt;参数, 即十六进制的形式的devicetoken.</p>
+<p>APNs要求使用HPACK(header compression for HTTP/2), 用来避免重复的header keys和values(即不同请求中的共有的’东西’). APNs会为HPACK维护一个小的动态表,为了避免HPACK表填满以及填满后需要删表数据, 请使用一下方式编码headers, 发送数量很大的数据流时尤其需要:</p>
+<ul>
+<li><p>header中的<code>:path</code>应该encoded成一个的字面量(无索引的).</p>
+</li>
+<li><p>header中的<code>apns-id</code>和<code>apns-expiration</code>应该根据前后不同的POST请求encoded成不同的值:</p>
+<p>  • apns-id和apns-expiration以递增索引的形式编码从而可以将这些header names加到HPACK的动态表中.<br>  • 后续我们发送这些headers的时候,就可以将它们编码为字面量(无索引的).</p>
+</li>
+</ul>
+<p>其他的header都编码成带递增索引的字面量. (上述关于HPACK的内容待理解)</p>
+<p>APNs忽略标准HTTP/2中的其他headers,除了以下表中的headers:</p>
+<table>
+<thead>
+<tr>
+<th align="left">Header</th>
+<th align="left">Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">apns-id</td>
+<td align="left">通知ID,用来标识推送的,如果这条发送失败,APNs会使用这个值标识失败位置通过response返回; 格式为:32位小写16进制形式,分为8-4-4-4-12五段,比如123e4567-e89b-12d3-a456-42665544000</td>
+</tr>
+<tr>
+<td align="left">apns-expiratoin</td>
+<td align="left">过期日期(时间戳表示,即通知不在有效可以被丢弃的日期),当且仅当本条推送在APNs没有被覆盖才有效</td>
+</tr>
+<tr>
+<td align="left">apns-priority</td>
+<td align="left">有两个值: 10和5; 10表示立即发送; 5表示视手机的电量情况而定,这样的notification某些情况下有可能被丢弃</td>
+</tr>
+<tr>
+<td align="left">apns-topic</td>
+<td align="left">即推送证书中的topics,老证书通常来说我们使用bundleID(由于新的推送证书里面的<code>( 1.2.840.113635.100.6.3.6 )extension</code>部分会包含多个topics,所以有多个topics,必须指定一个topic(否则APNs不知道取证书中的哪一个topic)</td>
+</tr>
+</tbody></table>
+<p>要推送的内容是由JSON字典装载. 内容不能被压缩且最大体积为4K,至于内容的组装请参看 The Remote Notification Payload章节.</p>
+<p>###Response</p>
+<p>Response Headers如下</p>
+<p>表3:</p>
+<table>
+<thead>
+<tr>
+<th align="left">Header</th>
+<th align="left">Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">apns-id</td>
+<td align="left">即对应request中的apns-id</td>
+</tr>
+<tr>
+<td align="left">:status</td>
+<td align="left">状态码,在表4中罗列了所有的APNs返回的HTTP状态码</td>
+</tr>
+</tbody></table>
+<p>表4:</p>
+<table>
+<thead>
+<tr>
+<th align="left">status code</th>
+<th align="left">Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">200</td>
+<td align="left">success</td>
+</tr>
+<tr>
+<td align="left">400</td>
+<td align="left">bad request</td>
+</tr>
+<tr>
+<td align="left">403</td>
+<td align="left">证书有问题</td>
+</tr>
+<tr>
+<td align="left">405</td>
+<td align="left">request中:method值有问题.只能传POST</td>
+</tr>
+<tr>
+<td align="left">410</td>
+<td align="left">device token对应的设备上应用已经被卸载(即不再活跃)</td>
+</tr>
+<tr>
+<td align="left">413</td>
+<td align="left">消息的负载(payload)超过限制</td>
+</tr>
+<tr>
+<td align="left">429</td>
+<td align="left">对于一个device token,APNs收到过多request(应该是单推频次有限制)</td>
+</tr>
+<tr>
+<td align="left">500</td>
+<td align="left">APNs服务端内部错误</td>
+</tr>
+<tr>
+<td align="left">503</td>
+<td align="left">服务器宕机或不可用</td>
+</tr>
+</tbody></table>
+<p>如果一个request是成功的,那么对应的response的正文(body)是空的. 若失败,则正文会包含一个JSON字典,其结构如下:</p>
+<p>表5:</p>
+<table>
+<thead>
+<tr>
+<th align="left">Key</th>
+<th align="left">Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">reason</td>
+<td align="left">请求失败原因,表6罗列了对应的失败原因</td>
+</tr>
+<tr>
+<td align="left">timestamp</td>
+<td align="left">如果:status头里面的值是410, 这个timestamp就是APNs确认此token不会再活跃的时间戳</td>
+</tr>
+</tbody></table>
+<p>表6:</p>
+<table>
+<thead>
+<tr>
+<th align="left">Reason</th>
+<th align="left">Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">PayloadEmpty</td>
+<td align="left">消息的负载(payload)为空,通常对应response中的400错误</td>
+</tr>
+<tr>
+<td align="left">PayloadTooLarge</td>
+<td align="left">消息的负载(payload)大小超过限制</td>
+</tr>
+<tr>
+<td align="left">BadTopic</td>
+<td align="left">apns-topic 参数无效</td>
+</tr>
+<tr>
+<td align="left">TopicDisallowed</td>
+<td align="left">无法向此topic推送即topic不匹配</td>
+</tr>
+<tr>
+<td align="left">BadMessageId</td>
+<td align="left">apns-id 不合法</td>
+</tr>
+<tr>
+<td align="left">BadExpirationDate</td>
+<td align="left">apns-expiration不合法</td>
+</tr>
+<tr>
+<td align="left">BadPriority</td>
+<td align="left">apns-priority不合法</td>
+</tr>
+<tr>
+<td align="left">MissingDeviceToken</td>
+<td align="left">:path头中没有包含device token</td>
+</tr>
+<tr>
+<td align="left">BadDeviceToken</td>
+<td align="left">device token非法</td>
+</tr>
+<tr>
+<td align="left">DeviceTokenNotForTopic</td>
+<td align="left">device token与topic不匹配</td>
+</tr>
+<tr>
+<td align="left">Unregistered</td>
+<td align="left">此token不再活跃,对应状态码410</td>
+</tr>
+<tr>
+<td align="left">DuplicateHeaders</td>
+<td align="left">header重复</td>
+</tr>
+<tr>
+<td align="left">BadCertificateEnvironment</td>
+<td align="left">证书环境错误(比如生产证书连测试推送服务器)</td>
+</tr>
+<tr>
+<td align="left">BadCertificate</td>
+<td align="left">证书无效</td>
+</tr>
+<tr>
+<td align="left">Forbidden</td>
+<td align="left">特定的action</td>
+</tr>
+<tr>
+<td align="left">BadPath</td>
+<td align="left">request中的:path值无效</td>
+</tr>
+<tr>
+<td align="left">MethodNotAllowed</td>
+<td align="left">:method只能为POST</td>
+</tr>
+<tr>
+<td align="left">TooManyRequests</td>
+<td align="left">不允许短时间内向同一个设备的应用推送</td>
+</tr>
+<tr>
+<td align="left">IdleTimeout</td>
+<td align="left">连接闲置超时</td>
+</tr>
+<tr>
+<td align="left">Shutdown</td>
+<td align="left">服务器宕机</td>
+</tr>
+<tr>
+<td align="left">Shutdown</td>
+<td align="left">服务器内部错误</td>
+</tr>
+<tr>
+<td align="left">ServiceUnavailable</td>
+<td align="left">服务不可用</td>
+</tr>
+<tr>
+<td align="left">MissingTopic</td>
+<td align="left">apns-topic头的值缺失(若证书有多个topic, 必须指定其中一个topic,否则就报错,因为APNs不知道你要用哪一个topic)</td>
+</tr>
+</tbody></table>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text=最进好像Apple又要更新APNs服务了"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2015/07/20/Communicating-with-APNs/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

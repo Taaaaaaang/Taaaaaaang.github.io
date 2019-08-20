@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>C 语言中的Storage classes | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2015/04/20/C-语言中的Storage-classes/">C 语言中的Storage classes</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">April 20 2015</p>
+  </section>
+
+  <section class="article-entry">
+    <h3 id="Storage-classes"><a href="#Storage-classes" class="headerlink" title="Storage classes"></a>Storage classes</h3><p>我们介绍过变量的属性(attribute)包含 <em>name, type, size 和 value</em>. 这里我们要介绍下变量标识符(identifier) 的一些其他 attributes, 包括 storage class, storage duration, scope 和 linkage.</p>
+<p>C 语言提供的<strong>storage class specifier</strong>(存储类别标识符)有 <code>auto</code>, <code>register</code>, <code>extern</code>, <code>static</code>. 一个标识符的 storage class 决定了其storage duration, scope以及 linkage. </p>
+<ul>
+<li><strong>storage duration</strong> 即这个标识符存在于内存的时间段, 有些是短暂存在的, 有的则反复地创建和销毁, 还有的则存在于程序的整个生命周期. </li>
+<li><strong>scope</strong> 即作用域, 这个标识符在程序的哪些地方可以被引用到, 有的可以在程序的任何地方被引用, 而有的只是限制在一部分区域可以被引用到.</li>
+<li><strong>linkage</strong> 即可链接. 它决定了多源文件构成的程序中, 这个 identifier 是否只在所定义的文件中可见或者 用适当的声明后即可被其他文件可见.</li>
+</ul>
+<h4 id="Storage-class"><a href="#Storage-class" class="headerlink" title="Storage-class"></a>Storage-class</h4><p>storage-class 指示符可以分为 <em>automatic storage duration</em> 和<em>static storage duration</em>. 关键字<code>auto</code>用来声明<em>automatic storage duration</em>. 在变量声明的”块(block)”内, 创建变量即声明(不管是显式的还是隐式的)其为auto storage duration; 变量”存活”when block is active; 出了block区域 那么变量也就销毁了.</p>
+<h5 id="local-variables"><a href="#local-variables" class="headerlink" title="local variables"></a>local variables</h5><p>只有变量才拥有 automatic storage duration. 函数中的 local variables(参数列表及函数体内的)除非特别声明,  默认是automatic storage duration, 所以<code>auto</code>可以省略.</p>
+<blockquote>
+<p>Automatic storage is a means of conserving memory, because automatic variables exist only when they’re needed. They’re created when a function is entered and destroyed when the function is exited.</p>
+</blockquote>
+<h5 id="static-storage-class"><a href="#static-storage-class" class="headerlink" title="static storage class"></a>static storage class</h5><p>关键字<code>extern</code>和<code>static</code>用来标明 标识符(变量或者函数) 是<em>static storage duration</em>的.  这类标识符存在于程序的整个生命周期.  </p>
+<ul>
+<li>对于<code>static</code>变量, 其storage 是在程序开始执行前, 分配并初始化的(仅一次; 即在静态存储区). 对于<code>static</code> 函数来讲, 在程序开始执行时便存在. 虽然变量或者函数名在函数一开始执行便存在, 这并不意味着这些标识符可以在程序任何地方都可以访问. storage duration 和 scope 还是两个不同的问题的.</li>
+<li>对于<code>extern</code>变量, 通常我们的全局变量及全局函数都是默认为 <code>extern</code>的. 它们都是定义在任何函数外的, 而且程序执行期间都是有值的. 全局变量和函数可以被其声明/定义后的任何函数引用, 这就是我们要使用函数原型的原因– 我们写的<code>include stdio.h</code>这一句就是将我们常用的函数原型放置在程序的开头(比如<code>printf</code>), 这样在此之后, 这个函数对于剩下的代码即是可见的.</li>
+</ul>
+<blockquote>
+<p>Defining a variable as global rather than local allows unintended side effects to occur when a function that does not need access to the variable accidentally or maliciously modifies it. In general, global variable should be avoided except in certain situations with unique performance requirements.</p>
+</blockquote>
+<p>定义在函数中的本地变量使用<code>static</code>修饰的特别之处在于, 它的值在跳出函数后依然存在. 再次进入函数体, <code>static</code> 的本地变量依然保留着上次退出时的值;</p>
+<p>所有的 static storage duration 的数值类型的变量如果没有指定, 默认都会初始化为 0.</p>
+<h3 id="Scope-Rules"><a href="#Scope-Rules" class="headerlink" title="Scope Rules"></a>Scope Rules</h3><p>标识符的作用域即程序中标识符可以被引用的区域. 比如, 我们在 block 中定义一个本地变量, 它只能被它定义所在的或者所嵌套的 block内引用..  我们可以将作用域分为四大类: <em>function scope, file scope, block scope, and function-prototype scope</em></p>
+<ul>
+<li>function scope: 只有labels. 即标识符后跟着一个冒号, 比如<code>start:</code> 它们只能在所在的函数内被引用. 常见的 label 比如<code>switch</code>声明中的<code>case</code> 以及<code>goto</code>声明. Labels are implementation details that functions hide from one another.</li>
+<li>file scope: 声明在所有函数外的标识符的作用域是<code>file scope</code>. 这样的标识符从其定义处到文件末尾都是可见的. 比如全局变量, 函数定义, 以及函数原型都是 file scope 的.</li>
+<li>block scope: 定义在 block(<code>{}</code>包裹的) 内的即是 block scope的. 作用域截止到一对<code>{}</code>的末尾. 函数体内开头定义的本地变量, 包括函数参数, 都被函数视为其”本地变量”. <em>Any block may contain variable definitions.</em>  当 block 嵌套时, 外部的 block 如有变量 name 与内部变量同名, 则外部 block 中的标识符会被内部的”屏蔽掉”, 直到内部的 block 结束.</li>
+<li>function-prototype scope: 唯一拥有此作用域的,即函数原型参数列表的标识符, 编译器会”忽略”它们(因为原型只要求参数类型 ), 所以程序的其他地方有与之同名的变量也不会有歧义</li>
+</ul>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text= id="Storage-classes"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2015/04/20/C-语言中的Storage-classes/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>

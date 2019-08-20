@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html>
+<head><meta name="generator" content="Hexo 3.9.0">
+  <meta charset="utf-8">
+  <title>多线程与内存管理高级教程-读书笔记 | 学习是一生的事情</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- <link rel='stylesheet' href='http://fonts.useso.com/css?family=Source+Code+Pro'> -->
+  
+</head>
+</html>
+<body>
+  <nav class="app-nav">
+  
+    
+      <a href="/.">home</a>
+    
+  
+    
+      <a href="/archives">archive</a>
+    
+  
+    
+      <a href="/atom.xml">rss</a>
+    
+  
+</nav>
+
+  <main class="post">
+  <article>
+  <h1 class="article-title">
+    <a href="/2016/11/03/多线程与内存管理高级教程-读书笔记/">多线程与内存管理高级教程-读书笔记</a>
+  </h1>
+
+  <section class="article-meta">
+    <p class="article-date">November 03 2016</p>
+  </section>
+
+  <section class="article-entry">
+    <p>这本书看起来不错拿来读读, 笔记只求自己看懂,嘻嘻嘻.</p>
+<h3 id="Life-before-Automatic-Reference-Counting"><a href="#Life-before-Automatic-Reference-Counting" class="headerlink" title="Life before Automatic Reference Counting"></a>Life before Automatic Reference Counting</h3><blockquote>
+<p>四原则</p>
+</blockquote>
+<ul>
+<li>You have ownership of any objects you create.</li>
+<li>You can take ownership of an object using retain.</li>
+<li>When no longer needed, you must relinquish ownership of an object you own.</li>
+<li>You must not relinquish ownership of an object you don’t own.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th align="left">Action for Objective-C Object</th>
+<th align="center">Objective-C Method</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">Create and have ownership of it</td>
+<td align="center">alloc/new/copy/mutableCopy group</td>
+</tr>
+<tr>
+<td align="left">Take ownership of it</td>
+<td align="center">retain</td>
+</tr>
+<tr>
+<td align="left">Relinquish it</td>
+<td align="center">release</td>
+</tr>
+<tr>
+<td align="left">Dispose of it</td>
+<td align="center">dealloc</td>
+</tr>
+</tbody></table>
+<ul>
+<li>引用计数 Apple 使用的是额外的 hashTable 来存储的, 而 GNUStep则是采用将计数存在每个object机构的头部.   这两者各有各的好处:<ul>
+<li>GNUStep 的实现省代码(不用像 Apple 一样额外管理 hashTable); 同时管理逻辑也很简单, 因为每个内存区域的引用计数都存在内存区域内.</li>
+<li>Apple 的实现则不需要考虑内存对齐问题(因为 GNUStep 中header部分需要对齐); 通过遍历 hashTable, 每个 object 所在的内存区域都是可以方便访问的(GNUStep 的就没那么方便了), 这样调试工就就能得到更多信息了(比如分析内存泄漏等).</li>
+</ul>
+</li>
+</ul>
+<p>ARC下可以使用CFGetRetainCount((__bridge CFTypeRef)myObject)来查看retainCount.</p>
+<h4 id="Autorelease"><a href="#Autorelease" class="headerlink" title="Autorelease"></a>Autorelease</h4><p>autorelease 并非ARC, 更像 C 语言中的自动变量(automatic variable), 超出了作用域就销毁了.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">NSAutoreleasePool</span> *pool = [[<span class="built_in">NSAutoreleasePool</span> alloc] init];</span><br><span class="line"><span class="keyword">id</span> obj = [[<span class="built_in">NSObject</span> alloc] init];</span><br><span class="line">[obj autorelease];</span><br><span class="line">[pool drain]; <span class="comment">// 这里会调用[obj release];</span></span><br></pre></td></tr></table></figure>
+
+<p>在 Cocoa 框架中, NSRunloop 每个循环都会创建/销毁 NSAutoreleasePool.</p>
+<h2 id="ARC-Rules"><a href="#ARC-Rules" class="headerlink" title="ARC Rules"></a>ARC Rules</h2><p>Apple 对 ARC 的解释: Automatic Reference Counting(ARC) in Objective-C makes memory management the job of the compiler. By enabling ARC with the new Apple LLVM compiler, you will never need to type <code>retain</code> or <code>release</code> again, dramatically simplifying the development process, while reducing crashes and memory leaks. The compiler has a complete understanding of your objects, and releases each object the instant it is no longer used, so apps run as fast as ever, with predicatable, smooth performance.</p>
+<h4 id="概览"><a href="#概览" class="headerlink" title="概览:"></a>概览:</h4><p>ARC 给我们的直接观感就是我们不再显式地调用<code>retain</code>或<code>release</code>了. 在以下情景下, 源码默认会被自动编译为 ARC enble 的:</p>
+<pre><code>* clang 3.0 或更高版本;
+* 编译选项中`-fojbc-arc`</code></pre><p>要用 ARC, 我们需要对我们原有的代码做些改造, ARC 引入了一些所有权标识符.</p>
+<h4 id="所有权标识符"><a href="#所有权标识符" class="headerlink" title="所有权标识符"></a>所有权标识符</h4><p>在 Objective-C 中, <code>id</code>或者其他对象类型 被用作对象变量的类型. 对象类型在 Objective-C 中即指针类型, 比如 <code>NSObject *</code>. <code>id</code> 类型用来隐藏起实际class name.  <code>id</code>相当于 C 语言中的<code>void *</code>.</p>
+<p>在 ARC 中, <code>id</code>和对象类型的变量必然有以下四种所有权之一:<br>    * __strong<br>    * __weak<br>    * __unsafe_unretained<br>    * __autoreleasing</p>
+<p>一个一个讲:</p>
+<h5 id="strong"><a href="#strong" class="headerlink" title="__strong:"></a>__strong:</h5><p>作为<code>id</code>和对象类型的默认所有权修饰符. 它表示对象默认是<code>__strong 修饰的</code>. 比如<code>id __strong obj = [[NSObject alloc] init];</code>.   它是如何工作的呢?  在 ARC 环境中, 我们自己创建的 obj 默认有所有权(而且<code>release 方法会被默认添加到 ARC 环境中)</code>, 当控制流离开了变量所在的作用域, release 方法就自动被调用, 因为这个变量是被<code>__strong 修饰的</code>, 即其修饰的变量在超出作用域后会自动调用一次 release 方法; 被引用一次会被自动 retain 一次;  任何被<code>__strong</code>, <code>__weak</code>, <code>__autorelease</code> 修饰的默认初始化为 nil. 比如</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">id</span> __<span class="keyword">strong</span> ojb0;</span><br><span class="line"><span class="keyword">id</span> __<span class="keyword">weak</span> obj1;</span><br><span class="line"><span class="keyword">id</span> __autoreleasing obj2;</span><br><span class="line"></span><br><span class="line">上述的代码等同于:</span><br><span class="line"></span><br><span class="line"><span class="keyword">id</span> __<span class="keyword">strong</span> obj0 = <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">id</span> __<span class="keyword">weak</span> obj1 = <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">id</span> __autoreleasing obj2 = <span class="literal">nil</span>;</span><br></pre></td></tr></table></figure>
+
+<p>还记得 Apple 所说的内存管理四原则吗?  __strong 可以做到前两条. 离开变量作用域/赋值新的变量(即放弃原持有变量的所有权)/或者有成员变量的对象被销毁(成员变量也自动没有了所有者), 即自动调用 release 即第三条; 最后一条也满足, 因为我们无需再手动调用 release 了;</p>
+<h5 id="weak-所有权修饰符"><a href="#weak-所有权修饰符" class="headerlink" title="__weak 所有权修饰符"></a>__weak 所有权修饰符</h5><p>在上面看起来好像只要<strong>strong 修饰的, 编译器就可以完全满足内存管理的需要了.  但事实并非如此, 因为</strong>strong 还有一个不能解决的问题就是<strong>循环引用</strong>.</p>
+<h6 id="循环引用"><a href="#循环引用" class="headerlink" title="循环引用"></a>循环引用</h6><p>举个例子:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">@interface</span> <span class="title">Test</span>: <span class="title">NSObject</span></span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">id</span> __<span class="keyword">strong</span> obj_;</span><br><span class="line">&#125;</span><br><span class="line">- (<span class="keyword">void</span>)setObject:(<span class="keyword">id</span> __<span class="keyword">strong</span>)obj;</span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"><span class="class"><span class="keyword">@implementation</span> <span class="title">Test</span></span></span><br><span class="line">- (<span class="keyword">id</span>)init &#123;</span><br><span class="line">	<span class="keyword">self</span> = [<span class="keyword">super</span> init];</span><br><span class="line">	<span class="keyword">return</span> <span class="keyword">self</span>;</span><br><span class="line">&#125;</span><br><span class="line">- (<span class="keyword">void</span>)setObject:(<span class="keyword">id</span> __<span class="keyword">strong</span>)obj &#123;</span><br><span class="line">	obj_ = obj;</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 测试下</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">id</span> test0 = [Test alloc] init]; <span class="comment">// 1   objA</span></span><br><span class="line">	<span class="keyword">id</span> test1 = [Test alloc] init]; <span class="comment">// 2	 objB</span></span><br><span class="line">	[test0 setObject: test1];		 <span class="comment">// 3</span></span><br><span class="line">	[test1 setObject: test0];		 <span class="comment">// 4</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="number">1</span>: test0 持有 objA 的强引用</span><br><span class="line"><span class="number">2</span>: test1 持有 objB 的强引用</span><br><span class="line"><span class="number">3</span>: test0 的 obj_ 持有 objB 的强引用</span><br><span class="line"><span class="number">4</span>: test1 的 obj_ 持有 objA 的强引用</span><br><span class="line"></span><br><span class="line">test0离开大括号后, test0 自动销毁, 所以其持有的objA 的强引用也消失, objA release 一次; 同样 test1 自动销毁, objB release 一次.    这时, objB 的 obj_还持有一个 objA 的强引用, 同样 objA 的 obj_也持有 objB 的一个强引用, 所以两者都不会销毁, 这样内存就<span class="string">"泄漏"</span>的.</span><br></pre></td></tr></table></figure>
+
+<p>内存泄漏是指对象虽然已无用处(即被丢弃), 但是依然在内存中(这不是占着 XX 不XX 嘛).</p>
+<h6 id="自引用-自己引用自己形成一个循环引用"><a href="#自引用-自己引用自己形成一个循环引用" class="headerlink" title="自引用(自己引用自己形成一个循环引用)"></a>自引用(自己引用自己形成一个循环引用)</h6><p>还是上面的 Test 类</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">id</span> test = [[Test alloc] init];</span><br><span class="line">[test setObject: test];</span><br></pre></td></tr></table></figure>
+
+<p>有问题就有解决办法, 我们可以用<code>__weak</code>来修饰, 标明引用是”弱引用”, 不拥有所有权.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">id __weak obj = [[NSObject alloc] init];</span><br><span class="line"></span><br><span class="line">这种写法编译器会发警告⚠️, 因为创建出来的对象&quot;无人&quot;强持有, 则会立即release. 但是可以如下写法:</span><br><span class="line"></span><br><span class="line">&#123;</span><br><span class="line">	id __strong obj0 = [[NSObject alloc] init];  // objA</span><br><span class="line">	id __weak obj1 = obj0;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">第一句obj0 拥有新建对象objA的所有权的强引用; 第二句, obj1 指向与 obj0 指向的内容一样, 即 obj1 持有新建对象objA 有弱引用(即objA 若未销毁, 通过 obj1 还能引用到, 但是无对其所有权); 然后离开作用域(大括号), obj0 销毁, 所持有的强引用亦销毁, objA 没有人持有其所有权的强引用, 所以也销毁.  这样就不存在内存泄漏了.</span><br></pre></td></tr></table></figure>
+
+<p>所以我们可以使用<code>__weak</code>来避免循环引用问题.  关于<code>__weak</code>我们还需要知道, 假如一个对象被丢弃的时候(即无人拥有所有权时), 对它有弱引用的变量也会随之自动销毁, 即变量被赋值为 nil.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">id __weak ojb1 = nil;</span><br><span class="line">&#123;</span><br><span class="line">	id __strong obj0 = [[NSObject alloc] init]; // objA</span><br><span class="line">	obj1 = obj0;</span><br><span class="line">	NSLog(@&quot;A: %@&quot;, obj1);</span><br><span class="line">&#125;</span><br><span class="line">NSLog(@&quot;B: %@&quot;, ojb1);</span><br><span class="line"></span><br><span class="line">结果是:</span><br><span class="line">A:&lt;NSObject: 0x753e180&gt;</span><br><span class="line">B: (null)</span><br></pre></td></tr></table></figure>
+
+<p>我们一句一句分析括号内的: </p>
+<p>第一句: 我们创建了一个对象objA并拥有所有权, 并将所有权转交给 obj0;<br>第二句: obj1 对 obj0 指向的对象有个弱引用(无所有权);<br>第三句: 打印 obj0 指向的对象;<br>离开作用域(大括号), obj0 销毁, 对象objA 无人拥有所有权, 也自动 release, 最终销毁; obj1 对其的弱引用也消失并被赋值为 nil;</p>
+<p>通过<code>__weak</code> 我们可以避免循环引用问题, 同时还可以通过查看__weak 变量是否为 nil 来判断其指向的对象是否存在.</p>
+<h5 id="unsafe-unretained-所有权修饰符"><a href="#unsafe-unretained-所有权修饰符" class="headerlink" title="__unsafe_unretained 所有权修饰符"></a>__unsafe_unretained 所有权修饰符</h5><p>正如其名字所描述的, <code>__unsafe_unretain</code> 修饰符是不安全的. 通常在 ARC中, 编译器会帮助我们做一部分内存管理工作, 但是并非所有内存管理工作它都能通过其机制管理. <code>__unsafe_unretain</code>修饰的变量就不包含在这个机制内. 所以如果有</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">id __unsafe_unretain obj = [[NSObject alloc] init];</span><br></pre></td></tr></table></figure>
+
+<p>这样的代码我们就要手工管理了. 上句直接编译会有警告⚠️: <code>asigning retained obj to unsafe_unretained variable; obj will be released after assignment [-Warc-unsafe-retained-assign]</code></p>
+<p><code>__unsafe_unretained</code>变量没有对象的所有权, 这点和<code>__weak</code>一样.但是和<code>__weak</code>又有不同的是: 给<code>__unsafe_unretained</code>修饰的变量赋值要确保对象存在且对象的引用是<code>__strong</code>的.  这种在兼容旧系统时会用到.</p>
+<h5 id="autorelease-所有权修饰符"><a href="#autorelease-所有权修饰符" class="headerlink" title="__autorelease 所有权修饰符"></a>__autorelease 所有权修饰符</h5><p>简单来说, 我们不能在 ARC 环境中使用<code>autorelease</code>方法. 也不能使用 NSAutoreleasePool 这个类. 但是这种机制还是有效的,只是换种写法.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">// no-ARC</span><br><span class="line">NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];</span><br><span class="line">id obj = [[NSObject alloc] init];</span><br><span class="line">[obj autorelease];</span><br><span class="line">[pool drain];</span><br><span class="line"></span><br><span class="line">// ARC</span><br><span class="line">@autoreleasepool &#123;</span><br><span class="line">	id __autoreleasing obj = [[NSObject alloc] init];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>通常情况下我们无需显式地写<code>__autorelease</code>, 因为这个编译器会帮我们做.</p>
+<h5 id="Compiler-Cares-autorelease-Automatically"><a href="#Compiler-Cares-autorelease-Automatically" class="headerlink" title="Compiler Cares __autorelease Automatically"></a>Compiler Cares __autorelease Automatically</h5><p>我们通过非 alloc/new/copy/mutableCopy 方法获取到对象所有权时(而我们却不需要写 release), 因为其实对象是自动注册到 autoreleasepool中的, 所以其所有权也由 autoreleasepool自动消除.  这和获取一个autorelease 对象是一样的效果.  当方法返回对象时, 编译器会检测这个方法是否是 alloc/new/copy/mutableCopy 的, 如果不是, 返回的对象会自动注册到 autoreleasepool 中.  特别的, init 开头的方法返回的对象除外.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">@autoreleasepool</span> &#123;</span><br><span class="line">	<span class="keyword">id</span> __<span class="keyword">strong</span> obj = [<span class="built_in">NSMutableArray</span> array]; objA</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">我们逐行分析:</span><br><span class="line"><span class="keyword">id</span> __<span class="keyword">strong</span> obj = [<span class="built_in">NSMutableArray</span> array]; 赋值号右边, 得到一个新的对象(非我们创建的), 我们没有ownership.   执行本行后,我们通过对变量标注__<span class="keyword">strong</span> 标明 obj 持有新建对象的 ownership, 并且这个对象会注册到 autoreleasepool 中, 因为编译器检测到命名方式符合条件.</span><br><span class="line"></span><br><span class="line">然后离开 obj 的作用域后, obj 销毁, 其持有的强引用亦消失. 对象objA release 一次. 离开 autoreleasepool block 后, 所有注册到 autoreleasepool 的对象都release 一次, 对象objA不再有人持有, 销毁.</span><br></pre></td></tr></table></figure>
+
+<p>When a variable with a <strong>weak qualifier is used, the object is always registered in autoreleasepool. <strong>为什么呢?</strong> 因为 一个被</strong>weak 修饰的变量, 对其引用的对象并无所有权, 对象随时可能销毁, 但是我们又想用, 那么怎么办呢? 延时销毁嘛 我们想, 如果这个对象注册到 autoreleasepool 当中, 那么直到@autoreleasepool block 跳出前, 对象肯定存在的, 这样为了安全地通过<code>__weak</code>引用到对象, 让对象会默认注册到 autoreleasepool 中不失为一种好方法(实际也是这么做的). </p>
+<p>我们再看个例子(隐式的__autoreleasing). 默认地, <code>id obj</code>与<code>id __strong obj</code>等价.   但是<code>id *obj</code>呢? 等价于<code>id __strong *obj</code>吗? 正确的写法应该是等价于<code>id __autoreleasing *obj</code>. 为什么?</p>
+<p>Any pointers to ‘id’ or object types are qualified with __autoreleasing as default.<br>这里不太清楚, 后续补充;</p>
+<p>在 iOS 工程模板里, 都会自动添加一个<code>@autoreleasepool</code>代码块包裹着整个 Application 的代码.  类似的, NSRunLoop 在每次循环中都有一个 autoreleasepool, 一次运行环结束就 release所有 objects, 然后再生成一个 autoreleasepool.  这个机制无论是 ARC 还是 MRC 都是一致的.</p>
+<p>另外查看当前 autoreleasePool 信息的函数_objc_autoreleasePoolPrint();  在 ARC-enabled/disabled都是可用的.</p>
+<h6 id="strong-和-weak"><a href="#strong-和-weak" class="headerlink" title="__strong 和 __weak"></a>__strong 和 __weak</h6><p><strong>strong 和</strong>weak 变量的概念很像 C++中的 smart pointer(在 C++中叫做 <code>std::shared_ptr</code> 和<code>std::weak_ptr</code>, 用法和<strong>strong 和</strong>weak 类似.</p>
+<h4 id="小结"><a href="#小结" class="headerlink" title="小结:"></a>小结:</h4><p>在 ARC 环境下, 遵循以下原则:</p>
+<ol>
+<li>勿使用<code>retain</code>, <code>release</code>, <code>retainCount</code>, <code>autorelease</code>;</li>
+<li>勿使用<code>NSAllocateObject</code> 和<code>NSDeallocateObject</code>;</li>
+<li>遵循创建对象方法的命名规范;</li>
+<li>不要显式地调用<code>dealloc</code>;</li>
+<li>使用@autoreleasepool 而不是<code>NSAutoreleasePool</code>;</li>
+<li>不要使用<code>Zone</code>(NSZone);</li>
+<li>对象类型的变量不要作为 C 中结构体/共同体的成员;</li>
+<li><code>id</code>和<code>void*</code>必须显式转换;</li>
+</ol>
+<p>一条一条讲:</p>
+<ol>
+<li>由于 ARC 环境下, 编译器做内存管理相关的工作, 所以我们不要手动再去调用内存管理相关的方法了(retain, release, retainCount, autorelease等).</li>
+<li>不能用就是不能用;</li>
+<li>alloc/new/copy/mutableCopy   这些字段开头的方法返回的对象, caller has ownership of the object.   还有就是 init 开头的并且满足: 是实例方法; 返回一个对象; 返回值必须是对象类型.   这样的 init 方法返回的对象是不会被加到 autoreleasepool 的, 因为它初始化的对象是 alloc 来的, 所以the caller has ownership of the object.</li>
+<li>如果一个对象的所有权都 release 了, 那么它就要被 discarded 了那么, 它的 dealloc 会被调用;(ARC 下是编译器帮我们插入这个 dealloc 方法的调用, 所以我们不能再手动调用) 这个原则无论是 ARC 或 MRC 都适用.   如果我们用到 C 语言编写的库alloc了内存区域, 我们要在 dealloc 中 free 掉它.  在 Cocoa 框架下的类, dealloc适合将对象与相关 delegate 或者 observer 关联关系切断的地方. 比如<code>[[NSNotificationCenter defaultCenter] removeObserver:self];</code>.</li>
+<li>总之就是 ARC 下不要用<code>NSAutoreleasePool</code>;</li>
+<li>新的 OC runtime 已经忽略 zone 了, 所以不要再用 Zone 了.</li>
+<li>ARC 无法管理 C 结构体的生命周期, 即使要在 C 结构体中用 OC类, 要做一层转换或者使用<code>__unsafe_unretained</code>修饰,表明需要自行管理内存.</li>
+<li>id 与 void* 如何隐式转换? </li>
+</ol>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// no-ARC</span></span><br><span class="line"><span class="keyword">id</span> ojb = [<span class="built_in">NSObject</span> alloc] init];</span><br><span class="line"><span class="keyword">void</span> *p = obj;  <span class="comment">// 转换</span></span><br><span class="line"><span class="keyword">id</span> o = p;			<span class="comment">// 反向转换</span></span><br><span class="line">[o release];</span><br><span class="line"></span><br><span class="line"><span class="comment">// ARC 要使用__bridge,  __bridge__retained</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">id</span> obj = [[<span class="built_in">NSObject</span> alloc] init];</span><br><span class="line"><span class="keyword">void</span> *p = (__bridge <span class="keyword">void</span> *)obj; <span class="comment">// 转换</span></span><br><span class="line"><span class="keyword">id</span> o = (__bridge <span class="keyword">id</span>)p;				<span class="comment">// 反向转换</span></span><br></pre></td></tr></table></figure>
+
+<p>但是用<strong>bridge 比</strong>unsafe_unretained 更不安全. 我们得手动管理内存, </p>
+<p><strong>__bridge cast does not touch ownership status.</strong><br><strong>__bridge_retained cast works as if the assigned variable has ownership of the object.</strong><br><strong>__bridge_transfer与之相反, 相当于调用了 release</strong></p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ARC</span></span><br><span class="line"><span class="keyword">id</span> obj = [[<span class="built_in">NSObject</span> alloc] init];</span><br><span class="line"><span class="keyword">void</span> *p = (__bridge_retained <span class="keyword">void</span> *)obj;</span><br><span class="line"><span class="comment">// 等价于no-ARC 下</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">id</span> obj = [[<span class="built_in">NSObject</span> alloc] init];</span><br><span class="line"><span class="keyword">void</span> *p = obj;</span><br><span class="line">[(<span class="keyword">id</span>)p <span class="keyword">retain</span>];</span><br></pre></td></tr></table></figure>
+
+<h6 id="OC-object-和-CF-object"><a href="#OC-object-和-CF-object" class="headerlink" title="OC object 和 CF object"></a>OC object 和 CF object</h6><p>CF object 主要由 C 书写的, 也有 reference count. 在 CF 中, CFRetain 和 CFRelease 相当于OC non-ARC下的 retain 和 release.<br>OC 对象和 CF 对象之间的差异很小. 主要体现在对象的创建. 两者之间在 non-ARC 下是可以直接用的. 之间的相互转换叫做<code>Toll-Free Bridge</code>.</p>
+<p>对于 ARC 下我们可以用以下函数做转换</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">CFTypeRef</span> <span class="built_in">CFBridgingRetain</span>(<span class="keyword">id</span> X) &#123;</span><br><span class="line">	<span class="keyword">return</span> (__bridge_retained <span class="built_in">CFTypeRef</span>)X;</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">id</span> <span class="built_in">CFBridgingRelease</span>(<span class="built_in">CFTypeRef</span> X) &#123;</span><br><span class="line">	<span class="keyword">return</span> (__bridging_transfer <span class="keyword">id</span>)X;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<p>例子</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">CFMutableArrayRef</span> cfObject = <span class="literal">NULL</span>;</span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">id</span> obj = [[<span class="built_in">NSMutableArray</span> alloc] init];</span><br><span class="line">	cfObject = <span class="built_in">CFBridgingRetain</span>(obj);</span><br><span class="line">	<span class="built_in">CFShow</span>(cfObject);</span><br><span class="line">	printf(<span class="string">"retain count= "</span>%d\n<span class="string">", CFGetRetainCount(cfObject));</span></span><br><span class="line"><span class="string">&#125;</span></span><br><span class="line"><span class="string">printf("</span><span class="keyword">retain</span> count after the scope = <span class="string">"%d\n"</span>, <span class="built_in">CFGetRetainCount</span>(cfObject));</span><br><span class="line"><span class="built_in">CFRelease</span>(cfObject);</span><br><span class="line"></span><br><span class="line">输出结果:</span><br><span class="line">()   空数组</span><br><span class="line"><span class="keyword">retain</span> count = <span class="number">2</span></span><br><span class="line"><span class="keyword">retain</span> count after the scope = <span class="number">1</span></span><br></pre></td></tr></table></figure>
+
+<p>现在我们知道了Foundation 中的OC对象可以用于 Core Foundation 中. 对象也可以用 CFReleasee 来 做release操作.</p>
+<p>例子反过来: CF 创建的对象  作为Foundation对象来用.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">	<span class="built_in">CFMutableArrayRef</span> cfObject = <span class="built_in">CFArrayCreateMutable</span>(kCFAllocatorDefault, <span class="number">0</span>, <span class="literal">NULL</span>);</span><br><span class="line">	printf(<span class="string">"retain count = %d\n"</span>, <span class="built_in">CFGetRetainCount</span>(cfObject));</span><br><span class="line">	<span class="keyword">id</span> obj = <span class="built_in">CFBridgingRelease</span>(cfObject);</span><br><span class="line">	printf(<span class="string">"retain count after the cast = %d\n"</span>, <span class="built_in">CFGetRetainCount</span>(cfObject));</span><br><span class="line">	<span class="built_in">NSLog</span>(<span class="string">@"class=%@"</span>, obj);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<h4 id="Property"><a href="#Property" class="headerlink" title="Property"></a>Property</h4><p>随着 ARC 的引入, 我们对 OC class property 的修饰符也有了更新:</p>
+<table>
+<thead>
+<tr>
+<th align="left">property modifier</th>
+<th align="center">Ownership qualifier</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">assign</td>
+<td align="center">__unsafe_unretained</td>
+</tr>
+<tr>
+<td align="left">copy</td>
+<td align="center">__strong</td>
+</tr>
+<tr>
+<td align="left">retain</td>
+<td align="center">__strong</td>
+</tr>
+<tr>
+<td align="left">strong</td>
+<td align="center">__strong</td>
+</tr>
+<tr>
+<td align="left">unsafe_unretained</td>
+<td align="center">__unsafe_unretained</td>
+</tr>
+<tr>
+<td align="left">weak</td>
+<td align="center">__weak</td>
+</tr>
+</tbody></table>
+<p>给属性赋值 跟 给一个有相应 ownership 修饰符的变量赋值  是类似的.比如copy 修饰符不仅仅是赋值, 它会 copy 一份对象(按照 NSCopying protocol 方法 copyWithZone:)并赋值给属性;</p>
+<p>当我们声明一个和 property对应的成员变量时, 他们的 ownership 修饰符必须一致:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">@interface SomeObject: NSObject &#123;</span><br><span class="line">	id obj;</span><br><span class="line">&#125;</span><br><span class="line">@end</span><br></pre></td></tr></table></figure>
+
+<p>上面 obj 成员变量声明为 id 类型. 同时, 如果相应的 property 声明为<code>@property (nonatomic, weak) id obj;</code>   就会出现编译出错误, 因为两者 ownership qulified 必须一致.</p>
+<h4 id="Array"><a href="#Array" class="headerlink" title="Array"></a>Array</h4><p>前面我们讲的都是关于<code>id</code>和 object type 变量的 ownership. 接下来我们讲下关于 arrays 的.</p>
+<h2 id="ARC-Implementation"><a href="#ARC-Implementation" class="headerlink" title="ARC Implementation"></a>ARC Implementation</h2><p>Apple 说 ARC 使得内存管理成了编译器的工作. 但事实是, ARC 不仅仅是单由编译器实现的, 它还需要 OC runtime.  所以其实 ARC 是由</p>
+<ul>
+<li>Compiler: clang</li>
+<li>Objective-C runtime library: </li>
+</ul>
+<p>实现的.</p>
+<h3 id="详述-ARC"><a href="#详述-ARC" class="headerlink" title="详述 ARC"></a>详述 ARC</h3><h4 id="strong-是如何工作的"><a href="#strong-是如何工作的" class="headerlink" title="__strong 是如何工作的"></a>__strong 是如何工作的</h4><p>首先我们看个例子:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">	id __strong obj = [[NSObject alloc] init];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>Clang 编译器将其编译成类似以下伪代码:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">/* pseudo code by the compiler */</span><br><span class="line">id obj = objc_msgSend(NSObject, @selector(alloc)); objc_msgSend(obj, @selector(init)); </span><br><span class="line">objc_release(obj);</span><br></pre></td></tr></table></figure>
+
+<p>我们可以看到 objc_msgSend 调用了两次分别对应 alloc 和 init, 然后调用了 objc_release(这个是编译器自动插入的, 所以在 ARC 下, 我们不能再手动调用 release 了).</p>
+<h5 id="Calling-the-array-method"><a href="#Calling-the-array-method" class="headerlink" title="Calling the array method"></a>Calling the array method</h5><p>再看个例子</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">	id __strong obj = [NSMutableArray array];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>编译器编译后伪代码:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">/* pseudo code by the compiler */</span><br><span class="line">id obj = objc_msgSend(NSMutableArray, @selector(array)); objc_retainAutoreleasedReturnValue(obj); </span><br><span class="line">objc_release(obj);</span><br></pre></td></tr></table></figure>
+
+<p>通过非 alloc/new/copy/mutableCopy 方法返回一个对象.  我们看到大部分还是一样的, 只是这个<code>objc_retainAutoreleaseReturnValue</code>是什么鬼❓  因为”非原创group” 方法创建对象, 编译器都会在其后插入此函数, 为的是要 retain 这个新创建的对象(因为这个对象不是我们创建的而且它会默认加到 autoreleasepool 中)供我们使用, 后面的 release 是与之对应的(出了作用域前一刻 release).</p>
+<h5 id="Inside-the-array-Method"><a href="#Inside-the-array-Method" class="headerlink" title="Inside the array Method"></a>Inside the array Method</h5><p>再看下<code>array</code>这个方法内部</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">+ (id) array &#123;</span><br><span class="line">	return [[NSMutableArray alloc] init]; </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>会被编译成类似以下伪代码:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">/* pseudo code by the compiler */ + (id) array</span><br><span class="line">&#123;</span><br><span class="line">id obj = objc_msgSend(NSMutableArray, @selector(alloc)); objc_msgSend(obj, @selector(init));</span><br><span class="line">return objc_autoreleaseReturnValue(obj);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<p>任何返回一个加入 autoreleasepool 对象的方法都会调用<code>objc_autoreleaseReturnValue</code>函数, 它会把对象加到 autoreleasepool 并返回它.  但实际上,objc_autoreleaseReturnValue函数并不总是会将对象 register到 autoreleasepool 中.</p>
+<p>就像前面的代码中所示. objc_autoreleaseReturnValue会检测 caller 的执行代码是否在调用array这个方法后紧接着调用了objc_retainAutoreleasedReturnValue, 如果是, 则直接将新创建的 object 返回. 这样两者合作, 对象就绕开被添加到 autoreleasepool 中的命运. 这样性能就会得到提升.</p>
+<h5 id="weak-ownership-qualifier"><a href="#weak-ownership-qualifier" class="headerlink" title="__weak ownership qualifier"></a>__weak ownership qualifier</h5><p>__weak 有以下特征:</p>
+<ul>
+<li>引用的变量被销毁时自动赋值为 nil    ;</li>
+<li>自动添加到 autoreleasepool;</li>
+</ul>
+<p>例子</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">	id __weak obj1 = obj;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<p>编译后伪代码:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">/* pseudo code by the compiler */ </span><br><span class="line">id obj1;</span><br><span class="line">objc_initWeak(&amp;obj1, obj);</span><br><span class="line">objc_destroyWeak(&amp;obj1);</span><br></pre></td></tr></table></figure>
+
+<p>__weak 修饰的变量是由<code>objc_initWeak</code>函数初始化的, 执行到变量作用域末尾, <code>objc_destroyWeak</code>函数会调用并销毁变量.</p>
+<p>objc_initWeak 内部应该是类似这样的:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">obj1 = 0; // 清除obj1 内容, </span><br><span class="line">objc_storeWeak(&amp;obj1, obj); //然后调用objc_storeWeak将 obj 内容赋值给 obj1.</span><br><span class="line">``` </span><br><span class="line">	</span><br><span class="line">objc_destroyWeak 应该是类似这样的:</span><br></pre></td></tr></table></figure>
+
+<p>objc_storeWeak(&amp;obj1, 0); // 清除 obj1 内容</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">所以整体应该是这样的:</span><br></pre></td></tr></table></figure>
+
+<p>/* pseudo code by the compiler */<br>id obj1;<br>obj1 = 0;<br>objc_storeWeak(&amp;obj1, obj);<br>objc_storeWeak(&amp;obj1, 0);</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">objc_storeWeak函数将键值对注入一张table, 叫做 weak table. key 是第二个参数,	即 the address of the object to be assigned. value 是第一个参数, 即 the address of a variable that qualified with __weak. 如果 key 为 0, 则将此 key-value 实体清除出 table.  </span><br><span class="line"></span><br><span class="line"></span><br><span class="line">这段不太理解, 后续再看看:</span><br><span class="line">The weak table is implemented as a hash table as a reference count table (see Chapter 1, Section “The Implementation by Apple”). With that, variables qualified with __weak can be searched from a disposing object with reasonable performance. When the function is called with the same object for key, multiple __weak qualified variables will be registered for the same object.</span><br><span class="line">	</span><br><span class="line"></span><br><span class="line">##### Looking Under the Hood When an Object Is Discarded</span><br><span class="line"></span><br><span class="line">当对象不再有 owner 对其拥有ownership时, 就销毁(调用 objc_release)</span><br><span class="line"></span><br><span class="line">1. `objc_release`.</span><br><span class="line">2. `dealloc` is called because retain count becomes zero.</span><br><span class="line">3. `_objc_rootDealloc`.</span><br><span class="line">4. `object_dispose`.</span><br><span class="line">5. `objc_destructInstance`.</span><br><span class="line">6. `objc_clear_deallocating`.</span><br><span class="line"></span><br><span class="line">而`objc_clear_deallocating`内部会调用</span><br><span class="line"></span><br><span class="line">	1. From the weak table, get an entry of which the key is the object to be discarded.</span><br><span class="line">	2. Set nil to all the __weak ownership qualified variables in the entry.  //注意这里过多的__weak 会消耗 CPU 资源</span><br><span class="line">	3. Remove the entry from the table.</span><br><span class="line">	4. For the object to be disposed of, remove its key from the reference table.</span><br><span class="line">	</span><br><span class="line"></span><br><span class="line">##### Assigning a Newly Created Object</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">##### Immediate Disposal of Objects</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">##### Adding to autorelease pool Automatically</span><br></pre></td></tr></table></figure>
+
+<p>{<br>    id __weak obj1 = obj; NSLog(@”%@”, obj1);<br>}</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">编译后伪代码:</span><br></pre></td></tr></table></figure>
+
+<p>/* pseudo code by the compiler */<br>id obj1;<br>objc_initWeak(&amp;obj1, obj);<br>id tmp = objc_loadWeakRetained(&amp;obj1); // retain 了这个 obj1 所指的对象一下(编译器之所以会插入这一句是因为它看到后面有人用这个 obj1 指向的对象.<br>objc_autorelease(tmp); // 将其add 到 autoreleasepool 中<br>NSLog(@”%@”, tmp); objc_destroyWeak(&amp;obj1);</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">##### __autoreleasing ownership qualifier</span><br><span class="line"></span><br><span class="line">#### Reference Count</span><br><span class="line"></span><br><span class="line">* an object will be added to an autorelease pool, when the object is **used** through a variable qualified with __weak.  In conclusion, this design of `__weak` ensure that during the **usage of weak pointer**, its state is consistent.   记住, 这个是编译器检测到 只要后续有使用__weak 修饰的变量, 就会将其 add 到 autoreleasepool 中.</span><br></pre></td></tr></table></figure>
+
+<p>{<br>    NSObject* sp = [NSObject new];<br>    NSObject* __weak wp = sp;<br>    NSLog(@”%@”, wp);<br>}</p>
+<p>会被编译为:</p>
+<p>id sp = objc_msgSend(NSObject, “new”);<br>id wp;<br>objc_initWeak(&amp;wp, sp);<br>id tmp = objc_loadWeakRetained(wp);<br>NSLog(@”%@”, wp);<br>objc_release(tmp);<br>objc_destroyWeak(&amp;wp);<br>objc_storeStrong(&amp;sp, 0);</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">## Blocks</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">block 可以理解为: anonymous functions together with automatic (local) variables. 即有**自动变量**的**匿名函数**.  两个关键点: 匿名函数, 自动变量.</span><br><span class="line"></span><br><span class="line">* 匿名: 就是没有名字;</span><br><span class="line">* 自动变量:  C 中有以下几种变量类型:</span><br><span class="line">	* Automatic variables(即 local variables)</span><br><span class="line">	* Function arguments</span><br><span class="line">	* Static variables(static local variables)</span><br><span class="line">	* Static global variables</span><br><span class="line">	* Global variables</span><br><span class="line"></span><br><span class="line">其中后面三种定义在函数外部, 值存储在内存的特定区域. 它们三个除了variable scope 不同, 其他的都类似. 即使在函数外部, 它们的值也可以一直保持着.</span><br></pre></td></tr></table></figure>
+
+<p>int buttonId = 0;<br>void buttonCallback(int event) {<br>    printf(“buttonId:%d event=%d\n”, buttonId, event);<br>}</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">如果有一个按钮还好, 但是如果有多个按钮呢? 比如</span><br><span class="line"></span><br><span class="line">```ObjC</span><br><span class="line">int buttonId;</span><br><span class="line">void buttonCallback(int event) &#123;</span><br><span class="line">	printf(&quot;buttonId:%d event=%d\n&quot;, buttonId, event);</span><br><span class="line">&#125;</span><br><span class="line">void setButtonCallbacks() &#123;</span><br><span class="line">	for(int i = 0; i &lt; BUTTON_NUM; i++) &#123;</span><br><span class="line">		buttonId = i;</span><br><span class="line">		setButtonCallback(BUTTON_IDOFFSET + i, &amp;buttonCallback);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>上面代码问题很明显, 由于 buttonId 是公用的, 在 for 循环结束后, 所有的 buttongCallback 用的同样的 buttonId 值. 当如, 有人说, 我们可以设置一个参数把 buttonId 传给 callback 函数, 就像</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">void</span> buttonCallback(<span class="keyword">int</span> buttonId, <span class="keyword">int</span> event) &#123;</span><br><span class="line">	printf(<span class="string">"buttonId:%d event=%d\n"</span>, buttonId, event);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>但是这种情况下, caller 不但要存储函数指针还要存储参数变量. 通常情况下面向对象的方式更适合这种情景(一个回调绑定一个 id)</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">@interface</span> <span class="title">ButtonCallbackObject</span> : <span class="title">NSObject</span> </span>&#123;</span><br><span class="line">	<span class="keyword">int</span> buttonId_;</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"><span class="class"><span class="keyword">@implementation</span> <span class="title">ButtonCallbackObject</span> </span></span><br><span class="line">- (<span class="keyword">id</span>) initWithButtonId:(<span class="keyword">int</span>)buttonId &#123;</span><br><span class="line">	<span class="keyword">self</span> = [<span class="keyword">super</span> init]; </span><br><span class="line">	buttonId_ = buttonId; </span><br><span class="line">	<span class="keyword">return</span> <span class="keyword">self</span>;</span><br><span class="line">&#125;</span><br><span class="line">- (<span class="keyword">void</span>) callback:(<span class="keyword">int</span>)event &#123;</span><br><span class="line">	<span class="built_in">NSLog</span>(<span class="string">@"buttonId:%d event=%d\n"</span>, buttonId_, event);</span><br><span class="line">&#125; </span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">void</span> setButtonCallbacks() &#123;</span><br><span class="line">	<span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i &lt; BUTTON_MAX; ++i) &#123;</span><br><span class="line">		ButtonCallbackObject *callbackObj =</span><br><span class="line">[[ButtonCallbackObject alloc] initWithButtonId:i]; 		setButtonCallbackUsingObject(BUTTON_IDOFFSET, callbackObj);</span><br><span class="line">&#125; &#125;</span><br></pre></td></tr></table></figure>
+
+<p>但是上面这种写法未免太繁重了.</p>
+<p>语法: BNF</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Block_literal_expression ::= ^ block_decl compound_statement_body block_decl ::= return_type</span><br><span class="line">block_decl ::= parameter_list</span><br><span class="line">block_decl ::= type_expression</span><br></pre></td></tr></table></figure>
+
+<h4 id="Block-type-variables"><a href="#Block-type-variables" class="headerlink" title="Block type variables"></a>Block type variables</h4><p>block 字面量可以赋值给 block-type 类型的变量, 也就是说源码中 block 字面量代表着一个”值”. 这个值可以被赋值给一个 block-type 的变量.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">int (^blk)(int) = ^(int count)&#123;return count + 1;&#125;;</span><br><span class="line">// A Block is generated from the Block literal starting with “^”. And the Block is assigned to the variable “blk”.</span><br></pre></td></tr></table></figure>
+
+<p>用 <code>typedef</code>指令我们可以给 block 定义别名:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">typedef int (^blk_t)(int);</span><br></pre></td></tr></table></figure>
+
+<h4 id="Capturing-automatic-variables"><a href="#Capturing-automatic-variables" class="headerlink" title="Capturing automatic variables"></a>Capturing automatic variables</h4><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">int main() &#123;</span><br><span class="line">int dmy = 256;</span><br><span class="line">int val = 10;</span><br><span class="line">const char *fmt = &quot;val = %d\n&quot;;</span><br><span class="line">void (^blk)(void) = ^&#123;printf(fmt, val);&#125;;</span><br><span class="line">val = 2;</span><br><span class="line">fmt = &quot;These values were changed. val = %d\n&quot;;</span><br><span class="line">blk();</span><br><span class="line">return 0; </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>上述代码中, automatic 变量 fmt 和 val 声明后, 被用在 block里. 会发生什么呢?   这些 automatic 变量会被block 捕获(capture), 即使后续这些变量在外部变动了, 被block捕获的值不会受影响.  所以最后一句输出的依然是<code>10</code>;  我们接下来会学到一个<code>__block</code>的标识符. 用了它之后, 我们们就可以修改 automatic variable without capturing them.</p>
+<h5 id="block-标识符"><a href="#block-标识符" class="headerlink" title="__block 标识符"></a>__block 标识符</h5><p>当一个 automatic variable 被捕获时, 在 block 中捕获的值是 read-only 的, 所以变量不能修改. When an automatic variable is declared outside a Block literal, you can use __block specifier to assign a value to the variable inside the Block. </p>
+<p>变量被捕获其实就是 变量被传递到 block 结构体的构造函数中.</p>
+<p>其实我们说的__block 这个标识符是一种  storage-class-specifier,   C 中有以下几种 storage-class-specifier:</p>
+<ul>
+<li>typedef</li>
+<li>extern</li>
+<li>static</li>
+<li>auto</li>
+<li>register</li>
+</ul>
+<p>就像 <code>auto</code>意味着变量存储在内存栈区,  <code>static</code> 存储在内存数据区一样, __block 指明变量存储的位置.  __block 修饰的变量会被编译合成一个结构体指针, 类似这样的:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">struct __Block_byref_val_0 &#123;</span><br><span class="line">	void *__isa;</span><br><span class="line">	__Block_byref_val_0 *__forwarding; </span><br><span class="line">	int __flags;</span><br><span class="line">	int __size;</span><br><span class="line">	int val;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>所以<code>__block int val = 10;</code> 这样写法会被编译为类似</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">__Block_byref_val_0 val = &#123; </span><br><span class="line">	0,</span><br><span class="line">	&amp;val, </span><br><span class="line">	0,</span><br><span class="line">	sizeof(__Block_byref_val_0),</span><br><span class="line">	10 </span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h5 id="被捕获的-automatic-variables"><a href="#被捕获的-automatic-variables" class="headerlink" title="被捕获的 automatic variables"></a>被捕获的 automatic variables</h5><p>C array can’t be captured by the current implementation of Blocks. </p>
+<h2 id="Blocks-Implementation"><a href="#Blocks-Implementation" class="headerlink" title="Blocks Implementation"></a>Blocks Implementation</h2><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">struct __block_impl &#123; </span><br><span class="line">	void *isa;</span><br><span class="line">	int Flags;</span><br><span class="line">	int Reserved; void *FuncPtr;</span><br><span class="line">&#125;;</span><br><span class="line">struct __main_block_impl_0 &#123;</span><br><span class="line">	struct __block_impl impl;</span><br><span class="line">	struct __main_block_desc_0* Desc;</span><br><span class="line">	__main_block_impl_0(void *fp, struct __main_block_desc_0 *desc, int flags=0) &#123; </span><br><span class="line">		impl.isa = &amp;_NSConcreteStackBlock;</span><br><span class="line">		impl.Flags = flags;</span><br><span class="line">		impl.FuncPtr = fp;</span><br><span class="line">		Desc = desc; </span><br><span class="line">	&#125;</span><br><span class="line">&#125;;</span><br><span class="line">static void __main_block_func_0(struct __main_block_impl_0 *__cself) &#123;</span><br><span class="line">	printf(&quot;Block\n&quot;);</span><br><span class="line">&#125;</span><br><span class="line">static struct __main_block_desc_0 &#123;</span><br><span class="line">	unsigned long reserved;</span><br><span class="line">	unsigned long Block_size; </span><br><span class="line">&#125; __main_block_desc_0_DATA = &#123;</span><br><span class="line">	0,</span><br><span class="line">	sizeof(struct __main_block_impl_0) </span><br><span class="line">&#125;;</span><br><span class="line">int main() &#123;</span><br><span class="line">	void (*blk)(void) = (void (*)(void))&amp;__main_block_impl_0(</span><br><span class="line">(void *)__main_block_func_0, &amp;__main_block_desc_0_DATA);</span><br><span class="line"></span><br><span class="line">((void (*)(struct __block_impl *))(</span><br><span class="line">(struct __block_impl *)blk)-&gt;FuncPtr)((struct __block_impl *)blk);</span><br><span class="line">	return 0; </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li>a variable type “id” is used to store an Objective-C object, 所以 id类型是用来存储 OC 对象的.</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">typedef struct objc_object &#123; </span><br><span class="line">	Class isa;</span><br><span class="line">&#125; *id;</span><br><span class="line"></span><br><span class="line">啥是 Class:</span><br><span class="line"></span><br><span class="line">typedef struct objc_class *Class;</span><br><span class="line"></span><br><span class="line">啥是 objc_class:</span><br><span class="line"></span><br><span class="line">struct objc_class &#123; </span><br><span class="line">	Class isa;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h5 id="Memory-Segments-for-Blocks"><a href="#Memory-Segments-for-Blocks" class="headerlink" title="Memory Segments for Blocks"></a>Memory Segments for Blocks</h5><p>从之前的章节中我们了解到, 由于 block和__block 修饰的变量本质上都是由对应的 struct实现的 automatic variable, 所以他们都是在栈上创建的.  又因为 Block 可以看做是 OC 对象, 它所属类是 _NSConcretesStackBlock.  其实还有更多类似的类</p>
+<ul>
+<li>_NSConcreteStackBlock</li>
+<li>_NSConcreteGlobalBlock</li>
+<li>_NSConcreteMallocBlock</li>
+</ul>
+<p>我们从名字可以看出, 有的 block名 带”stack”, 有的是”global”, 还有”malloc”的,  什么意思呢? 这意味着<code>_NSConcreteStackBlock</code> 的是存储在内存的 stack 区的, <code>_NSConcreteGlobalBlock</code> 的是存储在 data 区的, 而 <code>_NSConcreteMallocBlock</code> 是存储在head 区的.  我们前面讲得以及常用的大多是<code>_NSConcreteStackBlock</code>, 我们来举一些另外类型的例子:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">void (^blk)(void) = ^&#123;printf(&quot;Global Block\n&quot;);&#125;;</span><br><span class="line">int main() &#123;</span><br><span class="line">	//...</span><br><span class="line">	blk();</span><br><span class="line">	return 0;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>像上述这样的是存储在内存的 data section 的, 由于 automatic variable 是不能在函数外部声明的, 所以无法捕获这样的变量. 也就是说这样的 block 结构体实例中的成员变量由于不依赖执行上下文, 所以也不会有什么变动, 因此它们也存在于 data section.</p>
+<p>一个block结构体实例只有在它捕获变量的时候才变动, 比如下面的代码, 每次循环 automatic variable 都改变了并被block捕获:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">typedef int (^blk_t)(int);</span><br><span class="line">for (int rate = 0; rate &lt; 10; ++rate) &#123;</span><br><span class="line">	blk_t blk = ^(int count)&#123;return rate * count;&#125;;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>每次循环block结构体实例都不一样, 因为每次都捕获了 automatic variable.  如果 block 不捕获任何变量, 那么这样的实例只要一个不会变动.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">typedef int (^blk_t)(int);</span><br><span class="line">for (int rate = 0; rate &lt; 10; ++rate) &#123; </span><br><span class="line">	blk_t blk = ^(int count)&#123;return count;&#125;;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>The instance of the struct for the Block is stored in the data section of the program not only when Block is used where there are global variables, but also when a Block literal is inside a function and doesn’t capture any automatic variables.  也就是说只要 block 没有捕获变量, 就存在内存的 data section 否则就是存在 stack 区的_NSConcreteGlobalBlock类型.   </p>
+<p>那么啥时候是_NSConcreteMallocBlock类型(存在 heap 上)呢? 其实这个问题的答案也是以下问题的答案:</p>
+<ul>
+<li>Why can’t a Block exist beyond a variable scope?</li>
+<li>Why does a member variable “__forwarding” of a struct for __block<br>variables exist?</li>
+</ul>
+<p>_NSConcreteGlobalBlock类型的block 由于存储在 data section 上, 它就像 global 变量一样, 我们随时可以通过其指针访问到它, 但是存储在 stack 上的 block 或者是__block 修饰的变量, 超出其作用域后都会销毁.</p>
+<h5 id="Block-on-the-heap"><a href="#Block-on-the-heap" class="headerlink" title="Block on the heap"></a>Block on the heap</h5><p>我们了解到, Block可以被拷贝到 heap 上, 这样在离开其 scope 它依然可以”存活”, 怎么做到的?</p>
+<p>注意这一句:<code>impl.isa = &amp;_NSConcreteMallocBlock;</code> isa 指针的值被一个叫做<code>_NSConcreteMallocBlock</code>的对象替换了. 又因为我们想做到 <strong>block 变量 不论在 stack 还是在 heap 上都能被正确访问, 我们用`</strong>forwarding`成员变量来保存它.   即使<strong>block 变量被 copy 到 heap上,  stack 上的</strong>block 变量依然有在某些情况下依然会被访问的可能.  由于<strong>forwarding 成员变量的值已经 copy 到 heap 上了,而且 stack 上</strong>block 变量指向 heap 上的对应变量, 所以不论是 stack 上的还是 heap 上的__block 变量, 我们都能正确的访问它.</p>
+<h5 id="Copying-Block-Automatically"><a href="#Copying-Block-Automatically" class="headerlink" title="Copying Block Automatically"></a>Copying Block Automatically</h5><p>那么 Block 是如何 copy 的呢? 其实, ARC 环境中, 多数情况编译器会<strong>自动检测</strong>并将 block 从 stack 上 copy 到 heap 上. 我们看个例子:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="keyword">int</span> (^blk_t)(<span class="keyword">int</span>);</span><br><span class="line">blk_t func(<span class="keyword">int</span> rate) &#123;</span><br><span class="line">	<span class="keyword">return</span> ^(<span class="keyword">int</span> count)&#123;<span class="keyword">return</span> rate * count;&#125;; </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>函数 func 返回一个 block(这时是存储在 stack上的). 那么当控制权交回到 caller 时, 已经超出block 的 scope了, 它也会被销毁. 这开起来就有问题了.  我们再细看, 上面代码会被编译为类似以下伪代码:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">blk_t func(<span class="keyword">int</span> rate) &#123;</span><br><span class="line">	blk_t tmp = &amp;__func_block_impl_0(</span><br><span class="line">__func_block_func_0, &amp;__func_block_desc_0_DATA, rate);</span><br><span class="line">	tmp = objc_retainBlock(tmp);</span><br><span class="line">	<span class="keyword">return</span> objc_autoreleaseReturnValue(tmp); </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>由于 ARC, tmp 是__strong的, objc_retainBlock 这里的作用相当于<code>_Block_copy</code>(runtime)函数. 即<code>tmp = _Block_copy(tmp); return objc_autoreleaseReturnValue(tmp);</code>. 即函数返回 block 时, 编译器自动将其从 stack上 copy 到 heap 上, 并且加入到自动释放池.</p>
+<h5 id="Copying-Blocks-Manaully"><a href="#Copying-Blocks-Manaully" class="headerlink" title="Copying Blocks Manaully"></a>Copying Blocks Manaully</h5><p>以上前提都是大多数情况编译器会自动检测, 那如果编译器检测不到呢? 那我们就得手动将 block 从 stack上 copy 到 heap 上.  我们使用实例方法”copy”实现, 这里的 copy 方法即我们之前提到的 <code>alloc/new/copy/mutableCopy</code>方法组. 那么什么情况下编译器无法检测到呢?</p>
+<ul>
+<li>block 作为参数传递到方法或者函数里, 但是如果 method 或者 function 内部 copy 了参数, caller 就不必做手动 copy 了;</li>
+<li>Cocoa Framework 方法, 比如名字中包含<code>usingBlock</code>的;</li>
+<li>GCD 相关的 API;</li>
+</ul>
+<p>比如, 我们使用 NSArray 中的实例方法<code>enumerateObjectsUsingBlock:</code> 或者<code>dispatch_async</code>函数, 这些由于内部是做了 copy 的, 所以就不必 手动copy了. 其他情况就需要 copy 了. 比如:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">id</span>) getBlockArray &#123;</span><br><span class="line">	<span class="keyword">int</span> val = <span class="number">10</span>;</span><br><span class="line">	<span class="keyword">return</span> [[<span class="built_in">NSArray</span> alloc] initWithObjects:</span><br><span class="line">		 ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk0:%d"</span>, val);&#125;,</span><br><span class="line">		 ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk1:%d"</span>, val);&#125;,</span><br><span class="line">		 <span class="literal">nil</span>];</span><br><span class="line">		 <span class="comment">// 这些 block 是在 stack 的哦</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这样如果我们通过<code>getBlockArray</code>从 NSArray 对象获取 block, 然后执行会怎么样?  </p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">id</span> obj = getBlockArray();</span><br><span class="line"><span class="keyword">typedef</span> <span class="keyword">void</span> (^blk_t)(<span class="keyword">void</span>);</span><br><span class="line">blk_t blk = (blk_t)[obj objectAtIndex:<span class="number">0</span>];</span><br><span class="line">blk();</span><br></pre></td></tr></table></figure>
+
+<p>啊-哦, crash 了, 因为 block 在 getBlockArray 函数返回时已经销毁了, 不巧的是, 这种情况编译器检测不出来需要 copy block(有人说, 不用检测, 直接全 copy 不就行了嘛? 理论上没什么问题, 但是由于类似这样的操作很常规, 会大量消耗 CPU 资源, 而且如果 stack 上的 block 已经满足我们访问需求了, 再把它 copy 到 heap 其实在做无用功, 所以编译器不会这么粗暴应对), 那么这些情况就需要我们手动 copy.  所以代码应该修改成以下这样:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">id</span>) getBlockArray &#123;</span><br><span class="line">	<span class="keyword">int</span> val = <span class="number">10</span>;</span><br><span class="line">	<span class="keyword">return</span> [[<span class="built_in">NSArray</span> alloc] initWithObjects:</span><br><span class="line">	[^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk0:%d"</span>, val);&#125; <span class="keyword">copy</span>], </span><br><span class="line">	[^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk1:%d"</span>, val);&#125; <span class="keyword">copy</span>],</span><br><span class="line">	<span class="literal">nil</span>];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>在heap 或者在 data section 的 block 的 copy 类方法会发生什么?</p>
+<table>
+<thead>
+<tr>
+<th align="left">Block Class</th>
+<th align="center">Copied From</th>
+<th align="center">How “Copy” Works</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">_NSConcreteStackBlock</td>
+<td align="center">Stack</td>
+<td align="center">Copy from the stack to the heap</td>
+</tr>
+<tr>
+<td align="left">_NSConcreteGlobalBlock</td>
+<td align="center">.data section of the program</td>
+<td align="center">Do nothing</td>
+</tr>
+<tr>
+<td align="left">_NSConcreteMallocBlock</td>
+<td align="center">Heap</td>
+<td align="center">Increment the reference count of the object</td>
+</tr>
+</tbody></table>
+<p>无论 block 在哪里存储的, 调用 copy 类方法不会有什么副作用, 所以如果不确定是否该 copy, 那就都 copy 以下也无妨.</p>
+<h5 id="Copying-Block-Multiple-Times"><a href="#Copying-Block-Multiple-Times" class="headerlink" title="Copying Block Multiple Times"></a>Copying Block Multiple Times</h5><figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">blk = [[[[blk <span class="keyword">copy</span>] <span class="keyword">copy</span>] <span class="keyword">copy</span>] <span class="keyword">copy</span>];</span><br><span class="line"><span class="comment">// 上面这句等价于</span></span><br><span class="line"></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 假定stack 上的一个block 赋值给 blk(注意 blk 的 scope 大于这个大括号.</span></span><br><span class="line">	blk_t tmp = [blk <span class="keyword">copy</span>];</span><br><span class="line">	<span class="comment">// 然后 stack 上的 block 调用 copy 类方法, 相当于将其从 stack 上 copy 到 heap 上;</span></span><br><span class="line">	<span class="comment">// 然后赋值给一个 stack 上的 tmp 变量(默认是__strong), 拥有 ownership.</span></span><br><span class="line">	blk = tmp;</span><br><span class="line">	<span class="comment">// tmp 指向的 block(heap 上的) 赋值给 blk 变量. 则 blk 拥有 ownership. 原本在 stack 上的赋值给 blk 的 block  这里没有受到赋值的影响, 因为它是在stack 上的.  这样 blk 和 tmp 都有block 的 ownership. 超出 tmp 作用域, 相应的引用销毁, 然后 block release 一次, 然是 blk 也有 ownership 所以 block 没有销毁.</span></span><br><span class="line">&#125;</span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// blk有 heap 上的 block 的 ownership</span></span><br><span class="line">	blk_t tmp = [blk <span class="keyword">copy</span>];</span><br><span class="line">	<span class="comment">// heap 上的 block copy 后赋值给__strong 的 tmp, 所以 tmp 有 ownership, 注意这里的 block 已经与 blk 指向的不一样了(因为是 copy 的一份新的)</span></span><br><span class="line">	blk = tmp;</span><br><span class="line">	<span class="comment">// tmp 指向的 block又赋值给 blk(blk 被赋予了新值, 那么原来block 的引用就销毁了)</span></span><br><span class="line">	<span class="comment">// 此时 copy 过来的 block 同时有 tmp 和 blk 对它的strong reference.</span></span><br><span class="line">	<span class="comment">// 超出作用域后, tmp 引用销毁, block release 一次. 由于 blk 还依然持有 block 的 ownership, 所以 block 不会销毁</span></span><br><span class="line">&#125;</span><br><span class="line">&#123;</span><br><span class="line">	blk_t tmp = [blk <span class="keyword">copy</span>];</span><br><span class="line">	blk = tmp;</span><br><span class="line">&#125;</span><br><span class="line">&#123;</span><br><span class="line">	blk_t tmp = [blk <span class="keyword">copy</span>];</span><br><span class="line">	blk = tmp;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">//上述多次, 所以不会有什么问题.</span></span><br></pre></td></tr></table></figure>
+
+<h5 id="Memory-Segments-for-block-Variables"><a href="#Memory-Segments-for-block-Variables" class="headerlink" title="Memory Segments for __block Variables"></a>Memory Segments for __block Variables</h5><p>使用__block 的变量在 block 被从 stack 上 copy 到 heap 上时, __block 变量会如何呢?</p>
+<table>
+<thead>
+<tr>
+<th align="left">Storage of __block Variable</th>
+<th align="center">When a Block Is Copied from the Stack to the Heap</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">Stack</td>
+<td align="center">The __block variable is copied from the stack to the heap. The Block will have ownership of it.</td>
+</tr>
+<tr>
+<td align="left">Heap</td>
+<td align="center">The Block has ownership of the __block variable.</td>
+</tr>
+</tbody></table>
+<p>当 block 从 stack 上 copy 到 heap 上, 被它捕获的存在 stack 上的<strong>block变量就会被copy 到 heap 上,且 block 有这些</strong>block 变量的 ownership, 如果有多个 block 共享__block 变量, 那么 __block变量引用计数相应增加, 但是在 heap 只有一份.</p>
+<h5 id="forwarding"><a href="#forwarding" class="headerlink" title="__forwarding"></a>__forwarding</h5><p><strong>forwarding 是用来访问</strong>block 变量的,即 Memory Segments for block. 接下来我们看下它是如何工作的.</p>
+<p>the member variable “__forwarding” of the instance on the stack has the pointer to the instance on the heap so that the variable is accessed properly no matter where it is on the stack or on the heap.</p>
+<h5 id="Capturing-Objects"><a href="#Capturing-Objects" class="headerlink" title="Capturing Objects"></a>Capturing Objects</h5><ul>
+<li><p>什么时候 Block 会从 stack 上 copy 到 heap 上呢?</p>
+<ul>
+<li>When the instance method “copy” is called on the Block;</li>
+<li>When the Block is returned from a function;</li>
+<li>When the Block is assigned to a member variable of id or the Block type class, with __strong qualifier;</li>
+<li>When the Block is passed to a method, including “usingBlock” in the Cocoa Framework, or a Grand Central Dispatch API</li>
+</ul>
+</li>
+<li><p>The same way it takes ownership of the captured object by the copy function and the ownership is released by the dispose function, it takes ownership of the __block variable by the copy function and the ownership is released by the dispose function.</p>
+</li>
+<li><p>when an object is assigned to automatic variables with __strong, the object can exist beyond the variable scope, and when a __block variable is copied to the heap and a Block on the heap has ownership of it, it can exist beyond the variable scope.</p>
+</li>
+<li></li>
+</ul>
+<h5 id="block-Variables-and-Objects"><a href="#block-Variables-and-Objects" class="headerlink" title="__block Variables and Objects"></a>__block Variables and Objects</h5><h5 id="Circular-Reference-with-Blocks"><a href="#Circular-Reference-with-Blocks" class="headerlink" title="Circular Reference with Blocks"></a>Circular Reference with Blocks</h5><p>避免循环引用两种方式:</p>
+<ul>
+<li>1:使用__weak 修饰</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">typedef void (^blk_t)(void);</span><br><span class="line">@interface MyObject : NSObject &#123;</span><br><span class="line">	blk_t blk_; </span><br><span class="line">&#125;</span><br><span class="line">@end</span><br><span class="line">@implementation MyObject</span><br><span class="line">- (id)init &#123;</span><br><span class="line">	self = [super init];</span><br><span class="line">	id __weak tmp = self;</span><br><span class="line">	blk_ = ^&#123;NSLog(@&quot;self = %@&quot;, tmp);&#125;; </span><br><span class="line">	return self;</span><br><span class="line">&#125;</span><br><span class="line">- (void)dealloc &#123;</span><br><span class="line">	NSLog(@&quot;dealloc&quot;); </span><br><span class="line">&#125;</span><br><span class="line">@end</span><br><span class="line">int main() &#123;</span><br><span class="line">	id o = [[MyObject alloc] init];</span><br><span class="line">	NSLog(@&quot;%@&quot;, o);</span><br><span class="line">	return 0;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li>2 使用__block</li>
+</ul>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="keyword">void</span> (^blk_t)(<span class="keyword">void</span>);</span><br><span class="line"><span class="class"><span class="keyword">@interface</span> <span class="title">MyObject</span> : <span class="title">NSObject</span> </span>&#123;</span><br><span class="line">	blk_t blk_; </span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"><span class="class"><span class="keyword">@implementation</span> <span class="title">MyObject</span></span></span><br><span class="line">- (<span class="keyword">id</span>)init &#123;</span><br><span class="line">	<span class="keyword">self</span> = [<span class="keyword">super</span> init]; </span><br><span class="line">	__block <span class="keyword">id</span> tmp = <span class="keyword">self</span>; </span><br><span class="line">	blk_ = ^&#123;</span><br><span class="line">		<span class="built_in">NSLog</span>(<span class="string">@"self = %@"</span>, tmp);</span><br><span class="line">		tmp = <span class="literal">nil</span>; </span><br><span class="line">	&#125;;</span><br><span class="line">   <span class="keyword">return</span> <span class="keyword">self</span>;</span><br><span class="line">&#125;</span><br><span class="line">- (<span class="keyword">void</span>)execBlock &#123;</span><br><span class="line">	blk_(); </span><br><span class="line">&#125;</span><br><span class="line">- (<span class="keyword">void</span>)dealloc &#123;</span><br><span class="line">	<span class="built_in">NSLog</span>(<span class="string">@"dealloc"</span>); </span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">int</span> main() &#123;</span><br><span class="line"><span class="keyword">id</span> o = [[MyObject alloc] init];</span><br><span class="line">[o execBlock];  <span class="comment">// 这句是必要的, 它切断了循环链条</span></span><br><span class="line"><span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>第二种的优点:</p>
+<ul>
+<li>可以控制__block 变量的生命周期;</li>
+<li>无需考虑不支持__weak 的情况(iOS 4 及之前);</li>
+</ul>
+<p>缺点:</p>
+<ul>
+<li>必须要执行切断引用循环链的 block;</li>
+</ul>
+<h5 id="Copy-Release"><a href="#Copy-Release" class="headerlink" title="Copy/Release"></a>Copy/Release</h5><h2 id="Grand-Central-Dispatch"><a href="#Grand-Central-Dispatch" class="headerlink" title="Grand Central Dispatch"></a>Grand Central Dispatch</h2><h5 id="How-a-CPU-Executes-an-Application"><a href="#How-a-CPU-Executes-an-Application" class="headerlink" title="How a CPU Executes an Application"></a>How a CPU Executes an Application</h5><p>源码被转换成 CPU 字节码.  Application package 包含这样的字节码以及数据被安装在设备上. 当用户启动 app 时, 字节码就被加在到内存中, 然后 CPU 从一个特定地址开始, 一步一步执行这些字节码.  CPU 一个时间点只能执行一条指令, 我们可以将其类比为”路径”(path). 现在大多数设备都有多核心, 但是每个核心都还是只同时执行一条路径. 多线程意味着 app 可以有多条执行路径(同时).</p>
+<p>XNU 内核是 masOS 和 iOS 的核心部分, 它会频繁地在 paths 之间间隔性地切换, 当有系统事件比如系统调用, 那么就会有一个 executing state for a path 被存储在对应于每个 path的内存特定区域. </p>
+<h5 id="Advantages-and-Disadvantages-of-Multithreaded-Programming"><a href="#Advantages-and-Disadvantages-of-Multithreaded-Programming" class="headerlink" title="Advantages and Disadvantages of Multithreaded Programming"></a>Advantages and Disadvantages of Multithreaded Programming</h5><p>缺点:<br>    * 容易造成数据不一致;<br>    * 死锁问题(多个线程同时等待同个事件);<br>    * 内存占用问题;</p>
+<p>优点:<br>    * make application highly responsive;</p>
+<h2 id="GCD-Basics"><a href="#GCD-Basics" class="headerlink" title="GCD Basics"></a>GCD Basics</h2><h4 id="Dispatch-Queues"><a href="#Dispatch-Queues" class="headerlink" title="Dispatch Queues"></a>Dispatch Queues</h4><ul>
+<li>含义: 一个存储待执行 tasks 的 queue;</li>
+<li>分类: <ul>
+<li>serial dispatch queue;  // wait until the current running task finishes before starting another task.</li>
+<li>concurrent dispatch queue;  // doesn’t wait</li>
+</ul>
+</li>
+</ul>
+<p>比较下两者, 对于以下代码</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_async</span>(queue, blk0); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk1); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk2); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk3); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk4); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk5); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk6); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk7);</span><br></pre></td></tr></table></figure>
+
+<p>serial dispatch queue 的执行顺序是一个执行完成后再执行下一个:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">blk0</span><br><span class="line">blk1</span><br><span class="line">blk2</span><br><span class="line">blk3</span><br><span class="line">blk4</span><br><span class="line">blk5</span><br><span class="line">blk6</span><br><span class="line">blk7</span><br></pre></td></tr></table></figure>
+
+<p>concurrent dispatch queue 的执行顺序是启动一个 task 后, 不用等待前一个 task 完成即可启动下一个 task. 但是同时有多少个 task 运行取决于系统状态(比如队里中有多少个 task, CPU 核心数, CPU 使用率等).</p>
+<ul>
+<li>XNU 内核是系统的核心部分, 它决定了线程数(其实创建线程执行 task也是它做的). 当 task 执行完成后, running tasks 的数目减少, XNU kernel 会终止无用的线程. </li>
+</ul>
+<p>所以 concurrent dispatch queue 中 task 的执行顺序取决于 task 本身, 系统状态等等, 即是不定的(这也是缺点).  那么如果我们对 task 有时序要求, 建议使用 serial dispatch queue.</p>
+<h4 id="Obtaining-Dispatch-Queues"><a href="#Obtaining-Dispatch-Queues" class="headerlink" title="Obtaining Dispatch Queues"></a>Obtaining Dispatch Queues</h4><p>既然知道了有两类 dispatch queue, 我们如何获取呢?  也有两种方式: 一种是手动创建(dispatch_queue_create); 一种是利用现成的(main dispatch queue / global dispatch queue);</p>
+<h5 id="dispatch-queue-create"><a href="#dispatch-queue-create" class="headerlink" title="dispatch_queue_create"></a>dispatch_queue_create</h5><p>我们用这个函数创建 dispatch queue.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> mySerialDispatchQueue = dispatch_queue_create(<span class="string">"com.example.gcd.MySerialDispatchQueue"</span>, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li>每个 serial queues 都是独立的(各自绑定一个 thread, 由 system 创建), 当时各自同一时间只能执行一个 task;</li>
+<li>但是多个 serial queues 就会在多个 thread 上执行, 这样会有 race condition问题, 造成数据不一致, 所以建议要使用 serial, 就为一类 task分配一个而不是多个.</li>
+</ul>
+<p><strong>dispatch queue 使用完必须 dispatch_release, 因为它不是 ObjC object; 既然有 release 就有 dispatch_retain</strong></p>
+<p>block通过dispatch_async 添加到 dispatch queue 后, 即 has ownership of the dispatch queue by the dispatch_retain function(不论是 serial 还是 concurrent 的), 当 task 完成时,它才会 release 掉对 block 的 reference.   许多 GCD 的 API 都会包含”create”字眼, 我们通过这类方法获取到的 queue其实相当于 ARC 中的 alloc/new/copy/mutableCopy 类方法,拥有 ownership, 用完了就要记得 release 它们. 其他的方法如果要使用相应的 queue, 就要手动 take ownership 了(dispatch_retain), 手动释放(dispatch_release).</p>
+<h5 id="Main-Dispatch-Queue-Global-Dispatch-Queue"><a href="#Main-Dispatch-Queue-Global-Dispatch-Queue" class="headerlink" title="Main Dispatch Queue/Global Dispatch Queue"></a>Main Dispatch Queue/Global Dispatch Queue</h5><p>这类即系统提供的现成的 dispatch queue.</p>
+<ul>
+<li>main dispatch queue: 注意名字中的<strong>main</strong>, 它是绑定到主线程的(当然因为主线程只有一个, 所以 main dispatch queue 是 serial 的).</li>
+<li>其他系统提供的 queues 就是 global dispatch queues: 都是<strong>concurrent</strong>的, 也是<strong>global</strong>的. 所以多数情况下我们不需要自行创建 concurrent dispatch queue. 这些 global dispatch queue 可以基本分为四类(有不同的 priority):  high, default, low, background. XNU kernel 来管理不同的 dispatch queue 对应不同priority 的 threads. 当然这个 priority 也只是给我们做参考用的, 并不保证实际优先级.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th align="left">Name</th>
+<th align="center">Type</th>
+<th align="center">Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">Main dispatch queue</td>
+<td align="center">Serial dispatch queue</td>
+<td align="center">Executed on the main</td>
+</tr>
+<tr>
+<td align="left">Global dispatch queue (High priority)</td>
+<td align="center">concurrent dispatch queue</td>
+<td align="center">priority: high(utmost priority)</td>
+</tr>
+<tr>
+<td align="left">Global dispatch queue(default priority)</td>
+<td align="center">Concurrent dispatch queue</td>
+<td align="center">Priority:Normal</td>
+</tr>
+<tr>
+<td align="left">Global Dispatch queue(Low priority)</td>
+<td align="center">Concurrent Dispatch queue</td>
+<td align="center">Priority: low</td>
+</tr>
+<tr>
+<td align="left">Global Dispatch queue(Background Priority)</td>
+<td align="center">concurrent dispatch queue</td>
+<td align="center">Priority: Background</td>
+</tr>
+</tbody></table>
+<h4 id="Controlling-Dispatch-Queues"><a href="#Controlling-Dispatch-Queues" class="headerlink" title="Controlling Dispatch Queues"></a>Controlling Dispatch Queues</h4><h5 id="dispatch-set-target-queue"><a href="#dispatch-set-target-queue" class="headerlink" title="dispatch_set_target_queue"></a>dispatch_set_target_queue</h5><p>这个函数从其名字可以了解它是 设置 target queue 的. 不论是 serial 还是 concurrent dispatch queue, 通过 dispatch_queue_create 创建的 dispatch queue, 其Priority 默认都是 default(和 global queue 的默认值一样), 那么如果我想修改的话, 就可以通过 dispatch_set_target_queue 来设置:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> mySerialDispatchQueue = dispatch_queue_create(<span class="string">"com.example.gcd.MySerialDispatchQueue"</span>, <span class="literal">NULL</span>);</span><br><span class="line"><span class="built_in">dispatch_queue_t</span> globalDispatchQueueBackground = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, <span class="number">0</span>);</span><br><span class="line">dispatch_set_target_queue(mySerialDispatchQueue, globalDispatchQueueBackground);</span><br></pre></td></tr></table></figure>
+
+<p>前者的 Priority 变得和后者一样了(这里注意下, 第一个参数为自己创建的 queue, 而不是现成的系统的)</p>
+<h5 id="dispatch-after"><a href="#dispatch-after" class="headerlink" title="dispatch_after"></a>dispatch_after</h5><p>延迟添加任务到队列.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">dispatch_time_t time = dispatch_time(DISPATCH_TIME_NOW, <span class="number">3</span>ull * <span class="built_in">NSEC_PER_SEC</span>); dispatch_after(time, dispatch_get_main_queue(), ^&#123;</span><br><span class="line">	<span class="built_in">NSLog</span>(<span class="string">@"waited at least three seconds."</span>);</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>它与 3秒后我们手动把 task 添加到 queue 中效果一样, 但是实际什么时候执行就不一定了, 和 runloop 有关, 如果 runloop 一次循环间隔是 1/60 秒, 那么这个 task 就可能在 3 秒到 (3 秒 + 1/61) 秒之间执行, 获取更靠后(要看队列中它前面的task 有多少以及线程是否拖延了). 所以这个不能作为精确控制执行时间点的方法. 第一个参数是时间点, 由<code>dispatch_time</code>(用来创建相对时间)或者<code>dispatch_walltime</code>(用来创建绝对时间)函数创建.</p>
+<h4 id="Dispatch-Group"><a href="#Dispatch-Group" class="headerlink" title="Dispatch Group"></a>Dispatch Group</h4><p>如果我们想要在 queue 中所有 tasks 执行完后, 再执行一个 task,  对于 serial dispatch queue, 我们只需将 finalizing task 添加到 queue 的末尾即可. 但是对于 concurrent dispatch queue 就异常复杂了, 因为我们并不知道 tasks 啥时候完成.  那怎么办呢? 用 dispatch group. 要这么用</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, <span class="number">0</span>);</span><br><span class="line">dispatch_group_t group = dispatch_group_create();</span><br><span class="line">dispatch_group_async(group, queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk0"</span>);&#125;); dispatch_group_async(group, queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk1"</span>);&#125;); dispatch_group_async(group, queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk2"</span>);&#125;);</span><br><span class="line">dispatch_group_notify(group, dispatch_get_main_queue(), ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"done"</span>);&#125;);</span><br><span class="line">dispatch_release(group);</span><br></pre></td></tr></table></figure>
+
+<p>执行结果是</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">blk1</span><br><span class="line">blk2</span><br><span class="line">blk0</span><br><span class="line">done</span><br></pre></td></tr></table></figure>
+
+<p><strong>A dispatch group can monitor tasks to be finished no matter in which type of dispatch queues they are.</strong> 依然要记得, block 关联到(至于如何管理我们不需要管) dispatch_group 后就 has ownership of it. 同 dispatch_queue 类似, create 创建的 dispatch_group 最后要记得 release.</p>
+<p>我们也可以用 dispatch_group_wait来等待所有的 task 执行完(第二个参数是超时时间), 这会阻塞当前线程.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, <span class="number">0</span>);</span><br><span class="line">dispatch_group_t group = dispatch_group_create();</span><br><span class="line">dispatch_group_async(group, queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk0"</span>);&#125;); dispatch_group_async(group, queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk1"</span>);&#125;); dispatch_group_async(group, queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"blk2"</span>);&#125;);</span><br><span class="line">dispatch_group_wait(group, DISPATCH_TIME_FOREVER);</span><br><span class="line">dispatch_release(group);</span><br></pre></td></tr></table></figure>
+
+<p>我们还可以利用 dispatch_group_wait来判断是否 group finished.</p>
+<h5 id="dispatch-barrier-async"><a href="#dispatch-barrier-async" class="headerlink" title="dispatch_barrier_async"></a>dispatch_barrier_async</h5><p>现在假定我们有一系列关于数据库的操作, 多个read操作可以并发完成, 但是 write/update 操作必须放到 serial dispatch queue 里, 否则会造成数据不一致. 而且我们还要保证后续的 read 操作在 update 之后. 有人说可以通过 dispatch_group 和 dispatch_set_target_queue 函数实现, 但是会比较复杂.  GCD 提供了更好的解决方式: <code>dispatch_barrier_async</code>函数.</p>
+<p>我们想要在</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_queue_create( <span class="string">"com.example.gcd.ForBarrier"</span>, DISPATCH_QUEUE_CONCURRENT);</span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk0_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk1_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk2_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk3_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk4_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk5_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk6_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk7_for_reading);</span><br><span class="line">dispatch_release(queue);</span><br></pre></td></tr></table></figure>
+
+<p>blk3_for_reading 和 blk4_for_reading 之间write数据, 并且要求 blk4_for_reading 以及后续的 tasks 能够读取到更新的数据, 即</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="comment">// writting data.</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment">//from now on, all the tasks should read the updated data.</span></span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk4_for_reading);</span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk5_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk6_for_reading); </span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, blk7_for_reading);</span><br></pre></td></tr></table></figure>
+
+<p>如果直接这么写:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">dispatch_async(queue, blk0_for_reading); </span><br><span class="line">dispatch_async(queue, blk1_for_reading); </span><br><span class="line">dispatch_async(queue, blk2_for_reading); </span><br><span class="line">dispatch_async(queue, blk3_for_reading); </span><br><span class="line">dispatch_async(queue, blk_for_writing); </span><br><span class="line">dispatch_async(queue, blk4_for_reading); </span><br><span class="line">dispatch_async(queue, blk5_for_reading); </span><br><span class="line">dispatch_async(queue, blk6_for_reading); </span><br><span class="line">dispatch_async(queue, blk7_for_reading);</span><br></pre></td></tr></table></figure>
+
+<p>并不能保证我们的要求.</p>
+<p>我们可以使用<code>dispatch_barrier_async</code>函数, 这个要配合 concurrent dispatch queue</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">dispatch_async(queue, blk0_for_reading); </span><br><span class="line">dispatch_async(queue, blk1_for_reading); </span><br><span class="line">dispatch_async(queue, blk2_for_reading); </span><br><span class="line">dispatch_async(queue, blk3_for_reading); </span><br><span class="line">dispatch_barrier_async(queue, blk_for_writing); </span><br><span class="line">dispatch_async(queue, blk4_for_reading); </span><br><span class="line">dispatch_async(queue, blk5_for_reading); </span><br><span class="line">dispatch_async(queue, blk6_for_reading); </span><br><span class="line">dispatch_async(queue, blk7_for_reading);</span><br></pre></td></tr></table></figure>
+
+<p>这就达到了并发 “串行化”.</p>
+<h5 id="dispatch-sync"><a href="#dispatch-sync" class="headerlink" title="dispatch_sync"></a>dispatch_sync</h5><p>和 dispatch_async 不同的是, 它是阻塞式的, 即add the task to the dispatch queue synchrously, 等待 task 完成.  它可以看做是dispatch_group_wait 的简版.  但是缺点是可能造成死锁. 比如:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, <span class="number">0</span>);</span><br><span class="line"><span class="built_in">dispatch_sync</span>(queue, ^&#123;<span class="comment">/* a task */</span>&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>不管是同步还是异步添加到队列:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_queue_create(<span class="string">"com.example.gcd.MySerialDispatchQueue"</span>, <span class="literal">NULL</span>);</span><br><span class="line"><span class="built_in">dispatch_async</span>(queue, ^&#123;</span><br><span class="line">	<span class="built_in">dispatch_sync</span>(queue, ^&#123;<span class="built_in">NSLog</span>(<span class="string">@"Hello?"</span>);&#125;);</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>都会造成死锁. 那么怎么办呢? 类似dispatch_barrier_async, 它有一个”兄弟”, 叫做dispatch_barrier_sync, 用来解决????</p>
+<h5 id="dispatch-apply"><a href="#dispatch-apply" class="headerlink" title="dispatch_apply"></a>dispatch_apply</h5><p>这个函数跟 dispatch_sync和 dispatch_group 相关联. dispatch_apply 函数用来给一个 dispatch_queue 重复插入特定数量的 tasks, 并等待所有的 tasks 完成.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, <span class="number">0</span>);</span><br><span class="line">dispatch_apply(<span class="number">10</span>, queue, ^(size_t index) &#123; </span><br><span class="line">	<span class="built_in">NSLog</span>(<span class="string">@"%zu"</span>, index);</span><br><span class="line">&#125;); </span><br><span class="line"><span class="built_in">NSLog</span>(<span class="string">@"done"</span>);</span><br></pre></td></tr></table></figure>
+
+<p>由于是添加到了全局队列(concurrent的), 结果是</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">4</span><br><span class="line">1</span><br><span class="line">0</span><br><span class="line">3</span><br><span class="line">5</span><br><span class="line">2</span><br><span class="line">6</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">7</span><br><span class="line">done</span><br></pre></td></tr></table></figure>
+
+<p>有人说, 我们用 for 循环将 block 异步加到队列中,也能达到这样的效果, 的确是. 但是不容易做到等待所有 task 都执行完. 我们用 dispatch_apply 就很容易实现, 比如:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, <span class="number">0</span>);</span><br><span class="line">dispatch_apply([array count], queue, ^(size_t index) &#123; </span><br><span class="line">	<span class="built_in">NSLog</span>(<span class="string">@"%zu: %@"</span>, index, [array objectAtIndex:index]);</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>接下来我们看下<code>dispatch_suspend</code> 和<code>dispatch_resume</code>函数来控制 tasks 的执行.</p>
+<h5 id="dispatch-suspend-dispatch-resume"><a href="#dispatch-suspend-dispatch-resume" class="headerlink" title="dispatch_suspend/dispatch_resume"></a>dispatch_suspend/dispatch_resume</h5><p>想象一下这种情景, 我们向dispatch queue中 add many tasks, 而且需要把所有待task 都添加完后才开始执行task(这种情形有没有呢?比如其中某个 block 捕获的变量受其他 block的影响.)  我们就可以先把队列suspend, 等到想执行的时候再 resume 它. 这不会对当前正在执行的 task 造成影响.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">// 挂起队列, 先不让其中的 task 出队列</span><br><span class="line">dispatch_suspend(queue);</span><br><span class="line"></span><br><span class="line">// 恢复队列出口</span><br><span class="line">dispatch_resume(queue);</span><br></pre></td></tr></table></figure>
+
+<h4 id="Dispatch-Semaphore"><a href="#Dispatch-Semaphore" class="headerlink" title="Dispatch Semaphore"></a>Dispatch Semaphore</h4><p>dispatch semaphore 通常用在微粒度的并发控制, 它比 serial dispatch 或者 dispatch_barrier_async 函数粒度更小.</p>
+<p>如果 data are updated concurrently, 就会造成数据不一致问题甚至导致 app crash. 这种情况我们可以用 serial dispatch queue 或者 dispatch_barrier_async 函数来避免. 但是有时并发操作又不得不做而且要在更小的粒度上做. 比如下面这个例子:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">dispatch_queue_t queue =</span><br><span class="line">dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);</span><br><span class="line">NSMutableArray *array = [[NSMutableArray alloc] init];</span><br><span class="line">for (int i = 0; i &lt; 100000; ++i) &#123; </span><br><span class="line">	dispatch_async(queue, ^&#123;</span><br><span class="line">		[array addObject:[NSNumber numberWithInt:i]];</span><br><span class="line">	&#125;);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>NSMutableArray 在 global dispatch queue上更新, 意味着会同时被多个thread update. 但是 NSMutableArray 又非多线程安全的. 这时我们就可以用信号量来解决.</p>
+<p>dispatch semephore 即附带有计数器的 semaphore, 这个计数器在多线程编程中叫做计数信号. semaphore 源自交通疏导旗: 当旗举起来, 你就可以通过; 旗放下, 不能通过. semaphore 有个 counter 就是用来模拟这个操作:<br>    * counter == 0, 则阻塞当前线程;<br>    * counter &gt; 0, 则 counter减少, 并继续执行后续步骤;</p>
+<p>先看怎么用:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 先创建一个dispatch_semaphore, 计数器初始值为 1</span></span><br><span class="line">dispatch_semaphore_t semaphore = dispatch_semaphore_create(<span class="number">1</span>);</span><br></pre></td></tr></table></figure>
+
+<p>注意他名字中带有<strong>create</strong>, 所以用完要记得release.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);</span><br></pre></td></tr></table></figure>
+
+<p>dispatch_semephore_wait 函数会阻塞直到对应信号量计数器值&gt;=1, 然后它会 decrease 计数并返回. 第二个参数是超时时长. 它和<code>dispatch_group_wait</code>类似.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dispatch_queue_t</span> queue =</span><br><span class="line">dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, <span class="number">0</span>);</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 首先创建一个信号量并初始计数器为 1 来确保一个时间点只能有一个 thread 能访问 NSMutableArray 对象</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">dispatch_semaphore_t semaphore = dispatch_semaphore_create(<span class="number">1</span>);</span><br><span class="line"><span class="built_in">NSMutableArray</span> *array = [[<span class="built_in">NSMutableArray</span> alloc] init];</span><br><span class="line"><span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i &lt; <span class="number">100000</span>; ++i) &#123; </span><br><span class="line">	<span class="built_in">dispatch_async</span>(queue, ^&#123;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 等待直到 counter &gt;= 1</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);  <span class="comment">//满足通过条件</span></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		* 通过 wait 后就要将 counter 立即减 1,</span></span><br><span class="line"><span class="comment">		* 这时 count == 0, 其他想要访问 array 的线程都被阻塞(因为他们共享信号量,而这时信号量 counter == 0)</span></span><br><span class="line"><span class="comment">		*/</span></span><br><span class="line"></span><br><span class="line">		[array addObject:[<span class="built_in">NSNumber</span> numberWithInt:i]];</span><br><span class="line">	  <span class="comment">/*</span></span><br><span class="line"><span class="comment">		* 微粒度操作完成后需要发个信号, 表明我这里做完了, 下一个想访问的可以准备了</span></span><br><span class="line"><span class="comment">		* 如果有多个线程都在等待信号量时被阻塞, 那么即使信号量恢复&gt;0, 也要一个一个来 </span></span><br><span class="line"><span class="comment">	   */</span></span><br><span class="line">		dispatch_semaphore_signal(semaphore);</span><br><span class="line">	&#125;);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment">* Originally, because the dispatch semaphore isn’t needed any more,</span></span><br><span class="line"><span class="comment">* you have to release the dispatch semaphore. *</span></span><br><span class="line"><span class="comment">* dispatch_release(semaphore); */</span></span><br></pre></td></tr></table></figure>
+
+<h4 id="dispatch-once"><a href="#dispatch-once" class="headerlink" title="dispatch_once"></a>dispatch_once</h4><p>这个函数用来确保特定的 task 在 application 整个生命周期只被执行一次. 比如我们用来生成单例:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">static AFAppDotNetAPIClient *_singleton = nil;</span><br><span class="line">static dispatch_once_t onceToken;</span><br><span class="line">dispatch_once(&amp;onceToken, ^&#123;</span><br><span class="line">        _singleton = [[SingletonClass alloc] init];</span><br><span class="line">    &#125;);</span><br><span class="line">return _singleton;</span><br></pre></td></tr></table></figure>
+
+<h4 id="Dispatch-I-O"><a href="#Dispatch-I-O" class="headerlink" title="Dispatch I/O"></a>Dispatch I/O</h4><p>如果加载比较大的文件, 我们可能会想如果用多个线程并发加载会不会更快呢? 在现在设备的 I/O 能力下是有可能的. 怎么实现呢? 我们可以使用 dispatch I/O 以及 Dispatch Data. 当我们使用 Dispatch I/O 来读写文件时, 我们可以将文件分割成多份到全局队列里读取/写入.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 0 to 8191 byte. */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 8192 to 16383 byte */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 16384 to 24575 byte */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 24576 to 32767 byte */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 32768 to 40959 byte */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 40960 to 49151 byte */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 49152 to 57343 byte */&#125;); </span><br><span class="line">dispatch_async(queue, ^&#123;/* loading the file from between 57344 to 65535 byte */&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>就像代码所示, 加载过程被分配到多个 block 中完成. Dispatch Data 可以用来简化合并(或拆分)加载数据的过程.</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">pipe_q = dispatch_queue_create(<span class="string">"PipeQ"</span>, <span class="literal">NULL</span>);</span><br><span class="line">pipe_channel = dispatch_io_create(DISPATCH_IO_STREAM, fd, pipe_q, ^(<span class="keyword">int</span> err)&#123;</span><br><span class="line">	close(fd); </span><br><span class="line">&#125;);</span><br><span class="line">*out_fd = fdpair[<span class="number">1</span>];</span><br><span class="line">dispatch_io_set_low_water(pipe_channel, SIZE_MAX);</span><br><span class="line">dispatch_io_read(pipe_channel, <span class="number">0</span>, SIZE_MAX, pipe_q, ^(<span class="keyword">bool</span> done, dispatch_data_t pipedata, <span class="keyword">int</span> err)&#123;</span><br><span class="line">	<span class="keyword">if</span> (err == <span class="number">0</span>) &#123;</span><br><span class="line">		size_t len = dispatch_data_get_size(pipedata); <span class="keyword">if</span> (len &gt; <span class="number">0</span>) &#123;</span><br><span class="line">			<span class="keyword">const</span> <span class="keyword">char</span> *bytes = <span class="literal">NULL</span>; <span class="keyword">char</span> *encoded;</span><br><span class="line">			dispatch_data_t md = dispatch_data_create_map( pipedata, (<span class="keyword">const</span> <span class="keyword">void</span> **)&amp;bytes, &amp;len);</span><br><span class="line">			encoded = asl_core_encode_buffer(bytes, len); 			asl_set((aslmsg)merged_msg, ASL_KEY_AUX_DATA, encoded); 			free(encoded);</span><br><span class="line">			_asl_send_message(<span class="literal">NULL</span>, merged_msg, <span class="number">-1</span>, <span class="literal">NULL</span>); 			asl_msg_release(merged_msg);</span><br><span class="line">			dispatch_release(md); </span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> (done)&#123;</span><br><span class="line">	dispatch_semaphore_signal(sem); </span><br><span class="line">	dispatch_release(pipe_channel); 	</span><br><span class="line">	dispatch_release(pipe_q);</span><br><span class="line">&#125; </span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<h3 id="小结-1"><a href="#小结-1" class="headerlink" title="小结"></a>小结</h3><ul>
+<li>dispatch queue 与 thread 的关系;</li>
+<li>如何执行同步或异步的 block;</li>
+<li>如何规避 race condition;</li>
+</ul>
+<h2 id="GCD-Implementation"><a href="#GCD-Implementation" class="headerlink" title="GCD Implementation"></a>GCD Implementation</h2><p>更好的理解 GCD 是如何实现的, 如何工作的.</p>
+<h3 id="Dispatch-Queue"><a href="#Dispatch-Queue" class="headerlink" title="Dispatch Queue"></a>Dispatch Queue</h3><h4 id="Kernel-Level-Implementation"><a href="#Kernel-Level-Implementation" class="headerlink" title="Kernel-Level Implementation"></a>Kernel-Level Implementation</h4><p>从所提供的功能上来看, 我们可以猜测下 GCD 用到了以下组件:</p>
+<ul>
+<li>FIFO 队列, 用来管理添加的 block;</li>
+<li>轻量级的信号量: 用原子函数来实现并发控制;</li>
+<li>C 语言级别的容器: 用来管理 thread;</li>
+</ul>
+<p>当然, 如果以上就是全部的话, 就不需要内核级别的实现了. 也就是说, 既然app 开发者能使用 threads 写出同样的功能的话, 还要 GCD 干嘛…</p>
+<p>正如Apple 讲的:</p>
+<blockquote>
+<p>This technology takes the thread management code you would normally write in your own applications and moves that code down to the system level.</p>
+</blockquote>
+<p>即 线程管理 在系统层级, 也就是说开发者不需要触及. 事实上, GCD 有些 system-level 的实现, 叫做 XNU kernel(它也是 iOS 和 macOS 的核心). 也就是说开发者实现的app 级的线程管理基本上不可能比 GCD 实现的性能好, GCD 比用 pthreads 或者 NSThread 实现的要好. 当然 Apple 还为我们在 GCD 的基础上封装出了<code>NSOperationQueue</code>, 更方便我们使用.</p>
+<p>实际上, GCD 有移植到 Linux 版本的, 在<a href="https://www.heily.com/trac/libdispatch" target="_blank" rel="noopener">https://www.heily.com/trac/libdispatch</a>.</p>
+<h4 id="GCD-Structure"><a href="#GCD-Structure" class="headerlink" title="GCD Structure"></a>GCD Structure</h4><p>所有的暴露给开发者的 GCD APIs都是 libdispatch 库中的 C 函数.</p>
+<p>dispatch queue 本质上是由链表结构体实现的 FIFO queue;  其中的block也不是直接添加到 queue 中的, 首先它被<code>dispatch_continuation_t</code>类型的结构体包裹, 然后在被添加到 queue 中.</p>
+<p>dispatch queue 可以被转移到另一个 queue 中(用<code>dispatch_set_target_queue</code>函数).</p>
+<p>每个 global dispatch queue 都有自己的<code>pthread_workqueue</code>, 当 GCD 初始化后, <code>pthread_workqueue_create_np</code>函数会初始化<code>pthread_workqueues</code>.</p>
+<p>pthread_workqueue 是 Libc 中的私有 pthread API. 它会初始化一个 workqueue.</p>
+<h4 id="Executing-Blocks"><a href="#Executing-Blocks" class="headerlink" title="Executing Blocks"></a>Executing Blocks</h4><p>当一个 block 在全局队列中要执行时, libdispatch 会从队列中取出其所在的 dispatch_continuation. 然后调用<code>pthread_workqueue_additem_np</code>函数(参数有queue, workqueue information, callback), 然后它会用<code>workq_kernreturn system call</code>来通知有 item 被 add 到 workqueue 里了. XNU 得到这个通知后, 会基于当前系统状态创建一个 thread.  workqueues 对应的 threads 是通过一个特殊的 thread scheduler 管理的. 这里的上下文切换和普通的 thread不太一样, 所以这也是我们为何要用 GCD 的原因. 对应 workqueue 的 thread 会调用 pthread_workqueue 的函数, 这个函数内部会调用 callback 来执行 包裹在 dispatch continuation 中的block. 当 block 执行完, 相应的dispatch group 会被通知到, 然后这个 dispatch continuation 就会被released 了.  这边是粗略的执行流程.</p>
+<p>灵魂画师, 看不懂别见怪</p>
+<p>![](./sources/executing blocks001.png)</p>
+<h4 id="Dispatch-Source"><a href="#Dispatch-Source" class="headerlink" title="Dispatch Source"></a>Dispatch Source</h4><p>GCD 的另一个特性: <code>dispatch source</code>. 这在 app 层处理内核事件的有用工具. 它是对常见的 BSD 内核中的 kqueue 的封装. Kqueue 是一种响应内核事件的处理机制, 它非常轻量级不会消耗过多资源, 或者可以说它是在 app 层响应内核事件的最好的机制.</p>
+<p>dispatch source 可以处理以下内核事件:</p>
+<table>
+<thead>
+<tr>
+<th align="left">name</th>
+<th align="center">description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">DISPATCH_SOURCE_TYPE_DATA_ADD</td>
+<td align="center">data are added</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_DATA_OR</td>
+<td align="center">“or” is used for the data</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_MACH_SEND</td>
+<td align="center">Sent via MACH port</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_MACH_RECV</td>
+<td align="center">Received via MACH port</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_PROC</td>
+<td align="center">Process-related event is detected</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_READ</td>
+<td align="center">A file descriptor became readable</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_SIGNAL</td>
+<td align="center">Got signal</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_TIMER</td>
+<td align="center">Timer</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_VNODE</td>
+<td align="center">File system modified</td>
+</tr>
+<tr>
+<td align="left">DISPATCH_SOURCE_TYPE_WRITE</td>
+<td align="center">A file descriptor became writable</td>
+</tr>
+</tbody></table>
+<p>当事件发生时, 绑定到 event 的 task 就会执行.</p>
+
+  </section>
+</article>
+
+  <div class="sharing grid">
+  <section class="profile grid-item grid">
+    <img class="avatar" src="/images/avatar.png" alt="avatar" />
+    <div class="grid-item">
+      <p class="title"> 学习是一生的事情 </p>
+      <p class="subtitle">  </p>
+    <div>
+  </section>
+
+  <section class="share-btns">
+    <!-- <p> share it if you like it~ </p> -->
+    <a
+  class="twitter-share-button"
+  data-size="large"
+  data-via="DrakeLeung"
+  href="https://twitter.com/intent/tweet?text=这本书看起来不错拿来读读, 笔记只求自己"
+>
+  Tweet
+</a>
+
+<script>
+  window.twttr = (function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0],
+    t = window.twttr || {};
+  if (d.getElementById(id)) return t;
+  js = d.createElement(s);
+  js.id = id;
+  js.src = "https://platform.twitter.com/widgets.js";
+  js.async = true;
+  fjs.parentNode.insertBefore(js, fjs);
+
+  t._e = [];
+  t.ready = function(f) {
+    t._e.push(f);
+  };
+
+  return t;
+}(document, "script", "twitter-wjs"));
+</script>
+
+  </section>
+</div>
+
+
+  
+    
+<section class="article-comment">
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+</section>
+
+<script>
+  var disqus_shortname = 'Taaaaaaang';
+  
+  var disqus_url = 'https://taaaaaaang.github.io/2016/11/03/多线程与内存管理高级教程-读书笔记/';
+  
+  (function(){
+    var dsq = document.createElement('script');
+    dsq.type = 'text/javascript';
+    dsq.async = true;
+    dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+    (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+  })();
+</script>
+
+
+  
+</main>
+
+</body>
+</html>
